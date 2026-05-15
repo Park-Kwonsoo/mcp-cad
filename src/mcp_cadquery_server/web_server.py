@@ -147,7 +147,6 @@ async def push_sse_message(message_data: Optional[dict]) -> None:
 
 async def _process_and_push(request: dict) -> None:
     """Helper to run processing and push result via SSE."""
-    # process_tool_request is synchronous, run it directly
-    message_to_push = process_tool_request(request) # Use imported function
+    message_to_push = await asyncio.to_thread(process_tool_request, request)
     # push_sse_message is asynchronous
     await push_sse_message(message_to_push)

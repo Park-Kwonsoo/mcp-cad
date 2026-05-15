@@ -171,29 +171,25 @@ def client():
 # --- Test Cases for /mcp/execute Endpoint ---
 
 # Note: Need tmp_path injected into tests that use workspace_path
-@patch('src.mcp_cadquery_server.handlers.subprocess.run') # Patch where subprocess is used
+@patch('src.mcp_cadquery_server.handlers.cadquery_worker_pool.execute')
 @patch('src.mcp_cadquery_server.handlers.prepare_workspace_env') # Patch where prepare_workspace_env is used
-def test_mcp_execute_endpoint_script_success(mock_ensure_env, mock_subprocess_run, client, tmp_path):
-    """Test execute_cadquery_script via API with workspace, mocking subprocess."""
+def test_mcp_execute_endpoint_script_success(mock_ensure_env, mock_worker_execute, client, tmp_path):
+    """Test execute_cadquery_script via API with workspace, mocking worker execution."""
     # --- Mock Setup ---
     # Mock ensure_workspace_env to return a dummy python path
     mock_ensure_env.return_value = "/fake/venv/bin/python"
 
-    # Mock subprocess.run to return a successful CompletedProcess
-    # with expected JSON output from the script_runner
     request_id = f"test-endpoint-exec-{uuid.uuid4()}"
     result_id_expected = f"{request_id}_0"
     workspace_path = str(tmp_path / "test_workspace")
     # Create a dummy intermediate file path for the mock result
     dummy_brep_path = os.path.join(workspace_path, ".cq_results", result_id_expected, "shape_0.brep")
 
-    mock_runner_output = json.dumps({
+    mock_worker_execute.return_value = {
         "success": True,
         "results": [{"name": "shape_0", "type": "Workplane", "intermediate_path": dummy_brep_path}],
         "exception_str": None
-    })
-    mock_process = subprocess.CompletedProcess(args=[], returncode=0, stdout=mock_runner_output, stderr="")
-    mock_subprocess_run.return_value = mock_process
+    }
 
     # --- Test Execution ---
     script = "import cadquery as cq\nresult = cq.Workplane('XY').sphere(5)\nshow_object(result)"
@@ -218,9 +214,7 @@ def test_mcp_execute_endpoint_script_success(mock_ensure_env, mock_subprocess_ru
     # Check that ensure_workspace_env was called
     mock_ensure_env.assert_called_once_with(workspace_path)
 
-    # Check that subprocess.run was called (basic check)
-    mock_subprocess_run.assert_called_once()
-    # More specific checks on call args could be added if needed
+    mock_worker_execute.assert_called_once()
 
     # Check that the result was stored correctly in state.shape_results (based on mocked output)
     assert result_id_expected in state.shape_results
@@ -236,10 +230,10 @@ def test_mcp_execute_endpoint_script_success(mock_ensure_env, mock_subprocess_ru
     assert shape_info.get("intermediate_path") == dummy_brep_path
     print("POST /mcp/execute execute_cadquery_script test passed.")
 
-@patch('src.mcp_cadquery_server.handlers.subprocess.run')
+@patch('src.mcp_cadquery_server.handlers.cadquery_worker_pool.execute')
 @patch('src.mcp_cadquery_server.handlers.prepare_workspace_env')
-def test_mcp_execute_endpoint_script_params_success(mock_ensure_env, mock_subprocess_run, client, tmp_path):
-    """Test execute_cadquery_script with parameter_sets via API with workspace, mocking subprocess."""
+def test_mcp_execute_endpoint_script_params_success(mock_ensure_env, mock_worker_execute, client, tmp_path):
+    """Test execute_cadquery_script with parameter_sets via API with workspace, mocking worker execution."""
     # --- Mock Setup ---
     mock_ensure_env.return_value = "/fake/venv/bin/python"
 
@@ -249,12 +243,10 @@ def test_mcp_execute_endpoint_script_params_success(mock_ensure_env, mock_subpro
     dummy_brep_path_0 = os.path.join(workspace_path, ".cq_results", result_id_0, "shape_0.brep")
     dummy_brep_path_1 = os.path.join(workspace_path, ".cq_results", result_id_1, "shape_0.brep")
 
-    # Define the return values for consecutive calls to subprocess.run
-    mock_runner_output_0 = json.dumps({ "success": True, "results": [{"name": "shape_0", "type": "Workplane", "intermediate_path": dummy_brep_path_0}], "exception_str": None })
-    mock_runner_output_1 = json.dumps({ "success": True, "results": [{"name": "shape_0", "type": "Workplane", "intermediate_path": dummy_brep_path_1}], "exception_str": None })
-    mock_process_0 = subprocess.CompletedProcess(args=[], returncode=0, stdout=mock_runner_output_0, stderr="")
-    mock_process_1 = subprocess.CompletedProcess(args=[], returncode=0, stdout=mock_runner_output_1, stderr="")
-    mock_subprocess_run.side_effect = [mock_process_0, mock_process_1] # Return different results for each call
+    mock_worker_execute.side_effect = [
+        { "success": True, "results": [{"name": "shape_0", "type": "Workplane", "intermediate_path": dummy_brep_path_0}], "exception_str": None },
+        { "success": True, "results": [{"name": "shape_0", "type": "Workplane", "intermediate_path": dummy_brep_path_1}], "exception_str": None },
+    ]
 
     # --- Test Execution ---
     script = "import cadquery as cq\nlength = 1.0 # PARAM\nresult = cq.Workplane('XY').box(length, 2, 1)\nshow_object(result)"
@@ -277,7 +269,7 @@ def test_mcp_execute_endpoint_script_params_success(mock_ensure_env, mock_subpro
 
     # Check mocks were called correctly
     assert mock_ensure_env.call_count == 1 # ensure_workspace_env is called once before the loop
-    assert mock_subprocess_run.call_count == 2
+    assert mock_worker_execute.call_count == 2
 
     # Check results stored based on mocked outputs
     assert result_id_0 in state.shape_results and result_id_1 in state.shape_results

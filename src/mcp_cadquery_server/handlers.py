@@ -3,7 +3,6 @@
 # Import necessary modules
 import os
 import sys
-import json
 import uuid
 import subprocess
 import ast
@@ -23,13 +22,13 @@ from src.mcp_cadquery_server.core import (
 )
 
 from src.mcp_cadquery_server.models import ExecuteCadqueryScriptArgs
+from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
 # Import shared state and config
 from .state import (
     log,
     shape_results,
     part_index,
-    _PROJECT_ROOT, # Use project root for finding script_runner
     DEFAULT_PART_LIBRARY_DIR,
     DEFAULT_OUTPUT_DIR_NAME,
     DEFAULT_PART_PREVIEW_DIR_NAME,
@@ -37,25 +36,39 @@ from .state import (
     ACTIVE_PART_LIBRARY_DIR, # Use active config paths
     ACTIVE_OUTPUT_DIR_PATH,
     ACTIVE_RENDER_DIR_PATH,
-    ACTIVE_PART_PREVIEW_DIR_PATH
+    ACTIVE_PART_PREVIEW_DIR_PATH,
+    ACTIVE_STATIC_DIR,
 )
 
-def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: str = "unknown") -> dict:
+def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScriptArgs, str]:
+    """Accept direct model calls and raw MCP request dictionaries."""
+    if isinstance(args, ExecuteCadqueryScriptArgs):
+        return args, request_id
+    if isinstance(args, dict):
+        if "arguments" in args:
+            request_id = args.get("request_id", request_id)
+            return ExecuteCadqueryScriptArgs(**args.get("arguments", {})), request_id
+        return ExecuteCadqueryScriptArgs(**args), request_id
+    raise TypeError(f"Unsupported execute_cadquery_script argument type: {type(args)}")
+
+
+def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> dict:
     """
     Handles the 'execute_cadquery_script' tool request.
     Ensures workspace environment exists and executes the script
-    within that environment using a subprocess runner.
+    within that environment using a persistent CadQuery worker.
     """
     log.info(f"Handling execute_cadquery_script request (ID: {request_id})")
     try:
-        workspace_path = os.path.abspath(args.workspace_path)
-        script_content = args.script
+        execute_args, request_id = _coerce_execute_args(args, request_id)
+        workspace_path = os.path.abspath(execute_args.workspace_path)
+        script_content = execute_args.script
 
         # Determine parameter sets
-        if args.parameter_sets is not None:
-            parameter_sets = args.parameter_sets
-        elif args.parameters is not None:
-            parameter_sets = [args.parameters]
+        if execute_args.parameter_sets is not None:
+            parameter_sets = execute_args.parameter_sets
+        elif execute_args.parameters is not None:
+            parameter_sets = [execute_args.parameters]
         else:
             parameter_sets = [{}]
 
@@ -66,11 +79,6 @@ def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: 
         # Ensure the workspace environment is ready
         workspace_python_exe = prepare_workspace_env(workspace_path)
 
-        # Path to the script runner helper (relative to project root)
-        script_runner_path = os.path.join(_PROJECT_ROOT, "src", "mcp_cadquery_server", "script_runner.py")
-        if not os.path.exists(script_runner_path):
-            raise RuntimeError(f"Script runner not found at {script_runner_path}")
-
         results_summary = []
 
         for i, params in enumerate(parameter_sets):
@@ -79,38 +87,12 @@ def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: 
             log.info(f"[{log_prefix}] Preparing execution for parameter set {i} with params: {params}")
 
             try:
-                runner_input_data = json.dumps({
+                runner_result = cadquery_worker_pool.execute(workspace_path, workspace_python_exe, {
                     "workspace_path": workspace_path,
                     "script_content": script_content,
                     "parameters": params,
                     "result_id": result_id
                 })
-
-                cmd = [workspace_python_exe, script_runner_path]
-                log.info(f"[{log_prefix}] Running script runner: {' '.join(cmd)}")
-
-                sub_env = os.environ.copy()
-                sub_env["COVERAGE_RUN_SUBPROCESS"] = "1"
-
-                process = subprocess.run(
-                    cmd,
-                    input=runner_input_data,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    encoding='utf-8',
-                    env=sub_env,
-                    cwd=workspace_path
-                )
-
-                log.debug(f"[{log_prefix}] Runner stdout:\n{process.stdout}")
-                if process.stderr:
-                    log.warning(f"[{log_prefix}] Runner stderr:\n{process.stderr}")
-
-                if process.returncode != 0:
-                    raise RuntimeError(f"Script runner failed with exit code {process.returncode}. Stderr: {process.stderr}")
-
-                runner_result = json.loads(process.stdout)
 
                 shape_results[result_id] = runner_result
 
