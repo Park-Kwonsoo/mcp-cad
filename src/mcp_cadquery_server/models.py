@@ -12,7 +12,7 @@ class ExecuteCadqueryScriptArgs(BaseModel):
         None, description="Single parameter dictionary (converted to parameter_sets internally)"
     )
 
-    @root_validator
+    @root_validator(skip_on_failure=True)
     def check_params(cls, values):
         param_sets, params = values.get('parameter_sets'), values.get('parameters')
         if param_sets is not None:
