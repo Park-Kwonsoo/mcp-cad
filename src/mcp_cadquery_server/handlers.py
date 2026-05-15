@@ -28,6 +28,7 @@ from src.mcp_cadquery_server.core import (
     inspect_stl_sections as core_inspect_stl_sections,
     inspect_stl_plane_sections as core_inspect_stl_plane_sections,
     detect_mount_features as core_detect_mount_features,
+    render_stl_preview as core_render_stl_preview,
     validate_stl_solid as core_validate_stl_solid,
     solidify_stl_mesh as core_solidify_stl_mesh,
     probe_stl_tunnel as core_probe_stl_tunnel,
@@ -42,6 +43,7 @@ from src.mcp_cadquery_server.models import (
     InspectStlSectionsArgs,
     InspectStlPlaneSectionsArgs,
     DetectMountFeaturesArgs,
+    RenderStlPreviewArgs,
     ValidateStlSolidArgs,
     SolidifyStlMeshArgs,
     ProbeStlTunnelArgs,
@@ -419,6 +421,34 @@ def handle_detect_mount_features(request: dict) -> dict:
         }
     except Exception as e:
         error_msg = f"Error during STL mount feature detection: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_render_stl_preview(request: dict) -> dict:
+    """
+    Render an STL visual preview through MCP for quick top/front/right/iso review before or after repair.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling render_stl_preview request (ID: {request_id})")
+    try:
+        args = RenderStlPreviewArgs(**request.get("arguments", {}))
+        preview = core_render_stl_preview(
+            file_path=args.file_path,
+            output_path=args.output_path,
+            views=args.views,
+            width=args.width,
+            height=args.height,
+            margin=args.margin,
+            show_edges=args.show_edges,
+        )
+        return {
+            "success": True,
+            "message": f"STL preview rendered successfully: {preview['output_file']}",
+            "preview": preview,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL preview rendering: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
@@ -1083,6 +1113,7 @@ tool_handlers = {
     "inspect_stl_sections": handle_inspect_stl_sections,
     "inspect_stl_plane_sections": handle_inspect_stl_plane_sections,
     "detect_mount_features": handle_detect_mount_features,
+    "render_stl_preview": handle_render_stl_preview,
     "validate_stl_solid": handle_validate_stl_solid,
     "solidify_stl_mesh": handle_solidify_stl_mesh,
     "probe_stl_tunnel": handle_probe_stl_tunnel,

@@ -705,6 +705,42 @@ def test_process_tool_request_detect_mount_features(mock_detect):
     )
 
 
+@patch('src.mcp_cadquery_server.handlers.core_render_stl_preview')
+def test_process_tool_request_render_stl_preview(mock_render):
+    """Test direct render_stl_preview tool processing."""
+    mock_render.return_value = {
+        "success": True,
+        "output_file": "/tmp/source_preview.svg",
+        "view_count": 2,
+    }
+
+    response = process_tool_request({
+        "request_id": "test-render-preview",
+        "tool_name": "render_stl_preview",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "output_path": "/tmp/source_preview.svg",
+            "views": ["top", "iso"],
+            "width": 800,
+            "height": 400,
+            "show_edges": False,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["preview"]["output_file"] == "/tmp/source_preview.svg"
+    mock_render.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        output_path="/tmp/source_preview.svg",
+        views=["top", "iso"],
+        width=800,
+        height=400,
+        margin=24,
+        show_edges=False,
+    )
+
+
 @patch('src.mcp_cadquery_server.handlers.core_validate_stl_solid')
 def test_process_tool_request_validate_stl_solid(mock_validate):
     """Test direct validate_stl_solid tool processing."""
@@ -1693,6 +1729,7 @@ def test_stdio_mode_lists_mcp_tools():
         assert "Slice an STL through MCP" in tools_by_name["inspect_stl_sections"]["description"]
         assert "tilted planes through MCP" in tools_by_name["inspect_stl_plane_sections"]["description"]
         assert "mounting hole/slot candidates" in tools_by_name["detect_mount_features"]["description"]
+        assert "visual preview through MCP" in tools_by_name["render_stl_preview"]["description"]
         assert "Validate STL printability through MCP" in tools_by_name["validate_stl_solid"]["description"]
         assert "instead of CadQuery importers.importShape" in tools_by_name["solidify_stl_mesh"]["description"]
         assert "tunnel/cable channel through MCP" in tools_by_name["probe_stl_tunnel"]["description"]
