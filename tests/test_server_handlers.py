@@ -1340,9 +1340,10 @@ def test_mcp_execute_save_workspace_module_missing_args(client, tmp_path):
 
 # --- Test Cases for install_workspace_package Handler ---
 
-@patch('server._run_command_helper') # Mock the command runner
-@patch('server.prepare_workspace_env') # Corrected function name
-def test_mcp_execute_install_package_success(mock_ensure_env, mock_run_command, client, tmp_path):
+@patch('src.mcp_cadquery_server.handlers.cadquery_worker_pool.close_workspace')
+@patch('src.mcp_cadquery_server.handlers._run_command_helper')
+@patch('src.mcp_cadquery_server.handlers.prepare_workspace_env')
+def test_mcp_execute_install_package_success(mock_ensure_env, mock_run_command, mock_close_workspace, client, tmp_path):
     """Test install_workspace_package via API (success case)."""
     # --- Mock Setup ---
     workspace_path = str(tmp_path / "test_workspace")
@@ -1373,14 +1374,16 @@ def test_mcp_execute_install_package_success(mock_ensure_env, mock_run_command, 
     # Check mocks were called
     mock_ensure_env.assert_called_once_with(workspace_path)
     expected_install_command = ["uv", "pip", "install", package_to_install, "--python", fake_python_exe]
-    mock_run_command.assert_called_once_with(expected_install_command, log_prefix=f"InstallPkg({os.path.basename(workspace_path)})")
+    mock_run_command.assert_called_once_with(expected_install_command, log_prefix=f"InstallPkg({os.path.basename(workspace_path)})", cwd=workspace_path)
+    mock_close_workspace.assert_called_once_with(workspace_path)
 
     print("POST /mcp/execute install_workspace_package (Success) test passed.")
 
 
-@patch('server._run_command_helper') # Mock the command runner
-@patch('server.prepare_workspace_env') # Corrected function name
-def test_mcp_execute_install_package_failure(mock_ensure_env, mock_run_command, client, tmp_path):
+@patch('src.mcp_cadquery_server.handlers.cadquery_worker_pool.close_workspace')
+@patch('src.mcp_cadquery_server.handlers._run_command_helper')
+@patch('src.mcp_cadquery_server.handlers.prepare_workspace_env')
+def test_mcp_execute_install_package_failure(mock_ensure_env, mock_run_command, mock_close_workspace, client, tmp_path):
     """Test install_workspace_package via API (install command fails)."""
      # --- Mock Setup ---
     workspace_path = str(tmp_path / "test_workspace")
@@ -1411,7 +1414,8 @@ def test_mcp_execute_install_package_failure(mock_ensure_env, mock_run_command, 
     # Check mocks were called
     mock_ensure_env.assert_called_once_with(workspace_path)
     expected_install_command = ["uv", "pip", "install", package_to_install, "--python", fake_python_exe]
-    mock_run_command.assert_called_once_with(expected_install_command, log_prefix=f"InstallPkg({os.path.basename(workspace_path)})")
+    mock_run_command.assert_called_once_with(expected_install_command, log_prefix=f"InstallPkg({os.path.basename(workspace_path)})", cwd=workspace_path)
+    mock_close_workspace.assert_not_called()
     # Ideally check for tool_error SSE message indicating failure
 
     print("POST /mcp/execute install_workspace_package (Failure) test passed.")

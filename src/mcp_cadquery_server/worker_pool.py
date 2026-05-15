@@ -210,6 +210,13 @@ class CadQueryWorkerPool:
         for group in groups:
             group.close()
 
+    def close_workspace(self, workspace_path: str) -> None:
+        with self._lock:
+            keys = [key for key in self._groups if key[0] == workspace_path]
+            groups = [self._groups.pop(key) for key in keys]
+        for group in groups:
+            group.close()
+
     def _get_group(self, workspace_path: str, python_exe: str) -> _WorkspaceWorkerGroup:
         key = (workspace_path, python_exe)
         with self._lock:

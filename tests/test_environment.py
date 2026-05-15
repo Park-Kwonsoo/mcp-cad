@@ -18,6 +18,7 @@ from src.mcp_cadquery_server.env_setup import (
     prepare_workspace_env,
     _run_command_helper,
     workspace_reqs_mtime_cache,
+    workspace_env_signature_cache,
     PYTHON_VERSION as ENV_SETUP_PYTHON_VERSION # Import with alias if needed locally
 )
 from src.mcp_cadquery_server import state # Import state for defaults if needed
@@ -95,6 +96,7 @@ def test_prepare_workspace_env_creation(mock_which, mock_run_helper, tmp_path):
     # Clear cache for this path if it exists from previous failed runs
     if str(workspace_path) in workspace_reqs_mtime_cache:
         del workspace_reqs_mtime_cache[str(workspace_path)]
+    workspace_env_signature_cache.pop(str(workspace_path), None)
 
     workspace_path.mkdir(parents=True, exist_ok=True) # Create the dir before calling
     # --- Action ---
@@ -157,6 +159,7 @@ def test_prepare_workspace_env_existing_venv(mock_which, mock_run_helper, tmp_pa
     # Clear cache just in case
     if str(workspace_path) in workspace_reqs_mtime_cache:
         del workspace_reqs_mtime_cache[str(workspace_path)]
+    workspace_env_signature_cache.pop(str(workspace_path), None)
 
     # --- Action ---
     returned_python_exe = prepare_workspace_env(str(workspace_path))
@@ -219,6 +222,7 @@ def test_prepare_workspace_env_with_requirements(mock_which, mock_run_helper, tm
     # Clear cache
     if str(workspace_path) in workspace_reqs_mtime_cache:
         del workspace_reqs_mtime_cache[str(workspace_path)]
+    workspace_env_signature_cache.pop(str(workspace_path), None)
 
     # --- Action ---
     returned_python_exe = prepare_workspace_env(str(workspace_path))
@@ -285,6 +289,7 @@ def test_prepare_workspace_env_requirements_unchanged(mock_which, mock_run_helpe
     # Pre-populate the cache with the current mtime
     workspace_reqs_mtime_cache.clear() # Ensure clean cache for test
     workspace_reqs_mtime_cache[str(workspace_path)] = reqs_mtime
+    workspace_env_signature_cache.pop(str(workspace_path), None)
     print(f"Pre-populated cache for {workspace_path} with mtime {reqs_mtime}")
 
     # --- Action --- 
@@ -343,6 +348,7 @@ def test_prepare_workspace_env_requirements_changed(mock_which, mock_run_helper,
     workspace_reqs_mtime_cache.clear()
     old_mtime = initial_mtime - 10 # Simulate an older timestamp in cache
     workspace_reqs_mtime_cache[str(workspace_path)] = old_mtime
+    workspace_env_signature_cache.pop(str(workspace_path), None)
     print(f"Pre-populated cache for {workspace_path} with OLD mtime {old_mtime}")
 
     # --- Action --- 
@@ -410,6 +416,7 @@ def test_prepare_workspace_env_install_failure(mock_which, mock_run_helper, tmp_
     # Clear cache
     if str(workspace_path) in workspace_reqs_mtime_cache:
         del workspace_reqs_mtime_cache[str(workspace_path)]
+    workspace_env_signature_cache.pop(str(workspace_path), None)
 
     # --- Action & Assertion --- 
     with pytest.raises(RuntimeError) as excinfo:
@@ -433,6 +440,35 @@ def test_prepare_workspace_env_install_failure(mock_which, mock_run_helper, tmp_
     assert mock_run_helper.call_count == 3
 
     print(f"\nTest test_prepare_workspace_env_install_failure passed for {workspace_path}")
+
+
+@patch('src.mcp_cadquery_server.env_setup._run_command_helper')
+@patch('shutil.which')
+def test_prepare_workspace_env_fast_path_uses_signature_cache(mock_which, mock_run_helper, tmp_path):
+    """Test that an unchanged workspace env skips uv entirely after first verification."""
+    workspace_path = tmp_path / "cached_workspace"
+    workspace_path.mkdir()
+    requirements_file = workspace_path / "requirements.txt"
+    requirements_file.write_text("numpy")
+    reqs_mtime = requirements_file.stat().st_mtime
+
+    venv_dir = workspace_path / ".venv"
+    bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
+    expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
+    expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
+    expected_python_exe.touch()
+
+    workspace_reqs_mtime_cache[str(workspace_path)] = reqs_mtime
+    workspace_env_signature_cache[str(workspace_path)] = (str(expected_python_exe), reqs_mtime)
+
+    returned_python_exe = prepare_workspace_env(str(workspace_path))
+
+    assert returned_python_exe == str(expected_python_exe)
+    mock_which.assert_not_called()
+    mock_run_helper.assert_not_called()
+
+    workspace_reqs_mtime_cache.pop(str(workspace_path), None)
+    workspace_env_signature_cache.pop(str(workspace_path), None)
 
 
 

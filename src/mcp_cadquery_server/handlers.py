@@ -12,7 +12,12 @@ from typing import List, Dict, Any, Optional
 import cadquery as cq
 from cadquery import cqgi
 
-from src.mcp_cadquery_server.env_setup import prepare_workspace_env, _run_command_helper
+from src.mcp_cadquery_server.env_setup import (
+    prepare_workspace_env,
+    _run_command_helper,
+    workspace_env_signature_cache,
+    workspace_reqs_mtime_cache,
+)
 from src.mcp_cadquery_server.core import (
     export_shape_to_file,
     export_shape_to_svg_file,
@@ -77,7 +82,11 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
         log.info(f"Processing {len(parameter_sets)} parameter set(s).")
 
         # Ensure the workspace environment is ready
+        previous_env_signature = workspace_env_signature_cache.get(workspace_path)
         workspace_python_exe = prepare_workspace_env(workspace_path)
+        current_env_signature = workspace_env_signature_cache.get(workspace_path)
+        if previous_env_signature is not None and current_env_signature != previous_env_signature:
+            cadquery_worker_pool.close_workspace(workspace_path)
 
         results_summary = []
 
@@ -465,10 +474,7 @@ def handle_save_workspace_module(request: dict) -> dict:
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(module_content)
 
-        # Invalidate the mtime cache for this workspace's requirements
-        # This isn't strictly necessary for saving a module, but good practice
-        # if module changes might imply dependency changes later.
-        # workspace_reqs_mtime_cache.pop(workspace_path, None) # Removed, handled by install
+        cadquery_worker_pool.close_workspace(workspace_path)
 
         return {"success": True, "message": f"Module saved successfully to {target_path}.", "filename": target_path}
     except Exception as e: error_msg = f"Error saving workspace module: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
@@ -501,19 +507,16 @@ def handle_install_workspace_package(request: dict) -> dict:
 
         log.info(f"[{log_prefix}] Running install command: {' '.join(install_cmd)}")
         # Run the command using the helper, capturing output
-        success, output = _run_command_helper(install_cmd, log_prefix=log_prefix, cwd=workspace_path) # Run in workspace CWD
+        process = _run_command_helper(install_cmd, log_prefix=log_prefix, cwd=workspace_path) # Run in workspace CWD
 
-        if success:
-            log.info(f"[{log_prefix}] Successfully installed '{package_name}'.")
-            # Update the mtime cache after successful install
-            reqs_file = os.path.join(workspace_path, "requirements.txt")
-            if os.path.exists(reqs_file):
-                 from .state import workspace_reqs_mtime_cache # Import here to avoid top-level circularity if state imports handlers
-                 workspace_reqs_mtime_cache[workspace_path] = os.path.getmtime(reqs_file)
-            return {"success": True, "message": f"Package '{package_name}' installed successfully.", "output": output}
-        else:
-            log.error(f"[{log_prefix}] Failed to install '{package_name}'. Output:\n{output}")
-            raise RuntimeError(f"Failed to install package '{package_name}'. See logs for details.")
+        log.info(f"[{log_prefix}] Successfully installed '{package_name}'.")
+        reqs_file = os.path.join(workspace_path, "requirements.txt")
+        if os.path.exists(reqs_file):
+            workspace_reqs_mtime_cache[workspace_path] = os.path.getmtime(reqs_file)
+        workspace_env_signature_cache.pop(workspace_path, None)
+        cadquery_worker_pool.close_workspace(workspace_path)
+        output = "\n".join(part for part in [process.stdout, process.stderr] if part)
+        return {"success": True, "message": f"Package '{package_name}' installed successfully.", "output": output}
 
     except Exception as e: error_msg = f"Error installing workspace package: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
 
