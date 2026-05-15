@@ -772,6 +772,73 @@ PLANE_AXES = {
 }
 
 
+def _coerce_vector(value: Any, name: str) -> Vertex:
+    if isinstance(value, dict):
+        return (
+            _finite_number(value.get("x"), f"{name}.x"),
+            _finite_number(value.get("y"), f"{name}.y"),
+            _finite_number(value.get("z"), f"{name}.z"),
+        )
+    if isinstance(value, (list, tuple)) and len(value) == 3:
+        return (
+            _finite_number(value[0], f"{name}[0]"),
+            _finite_number(value[1], f"{name}[1]"),
+            _finite_number(value[2], f"{name}[2]"),
+        )
+    raise ValueError(f"{name} must be an object with x/y/z or a 3-item list.")
+
+
+def _vector_to_dict(vector: Vertex) -> Dict[str, float]:
+    return {"x": vector[0], "y": vector[1], "z": vector[2]}
+
+
+def _dot(a: Vertex, b: Vertex) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _subtract(a: Vertex, b: Vertex) -> Vertex:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def _add(a: Vertex, b: Vertex) -> Vertex:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _scale(vector: Vertex, factor: float) -> Vertex:
+    return (vector[0] * factor, vector[1] * factor, vector[2] * factor)
+
+
+def _cross(a: Vertex, b: Vertex) -> Vertex:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _length(vector: Vertex) -> float:
+    return math.sqrt(_dot(vector, vector))
+
+
+def _normalize_vector(vector: Vertex, name: str) -> Vertex:
+    length = _length(vector)
+    if length <= 1e-12:
+        raise ValueError(f"{name} must be a non-zero vector.")
+    return _scale(vector, 1.0 / length)
+
+
+def _plane_basis(normal: Vertex, x_direction: Optional[Vertex] = None) -> Tuple[Vertex, Vertex, Vertex]:
+    normal_unit = _normalize_vector(normal, "normal")
+    if x_direction is None:
+        reference = (1.0, 0.0, 0.0) if abs(normal_unit[0]) < 0.9 else (0.0, 1.0, 0.0)
+        x_axis = _normalize_vector(_cross(reference, normal_unit), "derived x_direction")
+    else:
+        projected = _subtract(x_direction, _scale(normal_unit, _dot(x_direction, normal_unit)))
+        x_axis = _normalize_vector(projected, "x_direction")
+    y_axis = _normalize_vector(_cross(normal_unit, x_axis), "plane y_direction")
+    return normal_unit, x_axis, y_axis
+
+
 def _normalize_axis(axis: str) -> str:
     normalized = axis.strip().lower()
     if normalized not in AXIS_INDICES:
@@ -1285,6 +1352,411 @@ def validate_stl_solid(
         "checks": checks,
         "risks": risks,
         "analysis": analysis,
+    }
+
+
+def _plane_signed_distance(point: Vertex, origin: Vertex, normal: Vertex) -> float:
+    return _dot(_subtract(point, origin), normal)
+
+
+def _plane_section_segments_for_triangles(
+    triangles: List[Triangle],
+    origin: Vertex,
+    normal: Vertex,
+    round_decimals: int,
+    epsilon: float = 1e-7,
+) -> List[Tuple[Vertex, Vertex]]:
+    segments: List[Tuple[Vertex, Vertex]] = []
+    for triangle in triangles:
+        candidates: List[Vertex] = []
+        edges = ((triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0]))
+        for a, b in edges:
+            da = _plane_signed_distance(a, origin, normal)
+            db = _plane_signed_distance(b, origin, normal)
+            if abs(da) <= epsilon and abs(db) <= epsilon:
+                candidates.extend([a, b])
+            elif abs(da) <= epsilon:
+                candidates.append(a)
+            elif abs(db) <= epsilon:
+                candidates.append(b)
+            elif da * db < 0:
+                candidates.append(_interpolate_vertex(a, b, da, db))
+
+        unique: Dict[Vertex, Vertex] = {}
+        for point in candidates:
+            unique[_point_key(point, round_decimals)] = point
+        points = list(unique.values())
+        if len(points) < 2:
+            continue
+        if len(points) > 2:
+            farthest_pair = (points[0], points[1])
+            farthest_distance = -1.0
+            for i, point_a in enumerate(points):
+                for point_b in points[i + 1:]:
+                    distance = _length(_subtract(point_a, point_b))
+                    if distance > farthest_distance:
+                        farthest_distance = distance
+                        farthest_pair = (point_a, point_b)
+            segments.append(farthest_pair)
+        else:
+            segments.append((points[0], points[1]))
+    return segments
+
+
+def _plane_coordinates(point: Vertex, origin: Vertex, x_axis: Vertex, y_axis: Vertex) -> Tuple[float, float]:
+    relative = _subtract(point, origin)
+    return (_dot(relative, x_axis), _dot(relative, y_axis))
+
+
+def _plane_polygon_signed_area(points: List[Vertex], origin: Vertex, x_axis: Vertex, y_axis: Vertex) -> float:
+    if len(points) < 3:
+        return 0.0
+    projected = [_plane_coordinates(point, origin, x_axis, y_axis) for point in points]
+    area = 0.0
+    for index, (u1, v1) in enumerate(projected):
+        u2, v2 = projected[(index + 1) % len(projected)]
+        area += u1 * v2 - u2 * v1
+    return area / 2.0
+
+
+def _plane_bounds(points: List[Vertex], origin: Vertex, x_axis: Vertex, y_axis: Vertex) -> Optional[Dict[str, Any]]:
+    if not points:
+        return None
+    projected = [_plane_coordinates(point, origin, x_axis, y_axis) for point in points]
+    us = [point[0] for point in projected]
+    vs = [point[1] for point in projected]
+    umin, umax = min(us), max(us)
+    vmin, vmax = min(vs), max(vs)
+    return {
+        "umin": umin,
+        "umax": umax,
+        "vmin": vmin,
+        "vmax": vmax,
+        "ulen": umax - umin,
+        "vlen": vmax - vmin,
+        "center": {
+            "u": umin + (umax - umin) / 2.0,
+            "v": vmin + (vmax - vmin) / 2.0,
+        },
+    }
+
+
+def _plane_polygon_centroid(
+    points: List[Vertex],
+    origin: Vertex,
+    x_axis: Vertex,
+    y_axis: Vertex,
+) -> Dict[str, Any]:
+    projected = [_plane_coordinates(point, origin, x_axis, y_axis) for point in points]
+    signed_area = _plane_polygon_signed_area(points, origin, x_axis, y_axis)
+    if len(projected) < 3 or abs(signed_area) <= 1e-12:
+        u = sum(point[0] for point in projected) / len(projected)
+        v = sum(point[1] for point in projected) / len(projected)
+    else:
+        cu = 0.0
+        cv = 0.0
+        factor_sum = 0.0
+        for index, (u1, v1) in enumerate(projected):
+            u2, v2 = projected[(index + 1) % len(projected)]
+            factor = u1 * v2 - u2 * v1
+            factor_sum += factor
+            cu += (u1 + u2) * factor
+            cv += (v1 + v2) * factor
+        if abs(factor_sum) <= 1e-12:
+            u = sum(point[0] for point in projected) / len(projected)
+            v = sum(point[1] for point in projected) / len(projected)
+        else:
+            u = cu / (3.0 * factor_sum)
+            v = cv / (3.0 * factor_sum)
+    global_point = _add(origin, _add(_scale(x_axis, u), _scale(y_axis, v)))
+    return {"plane": {"u": u, "v": v}, "global": _vector_to_dict(global_point)}
+
+
+def _plane_section_loops(
+    segments: List[Tuple[Vertex, Vertex]],
+    origin: Vertex,
+    x_axis: Vertex,
+    y_axis: Vertex,
+    round_decimals: int,
+    include_points: bool = False,
+) -> List[Dict[str, Any]]:
+    point_by_key: Dict[Vertex, Vertex] = {}
+    adjacency_sets: Dict[Vertex, set[Vertex]] = defaultdict(set)
+    for a, b in segments:
+        key_a = _point_key(a, round_decimals)
+        key_b = _point_key(b, round_decimals)
+        if key_a == key_b:
+            continue
+        point_by_key[key_a] = a
+        point_by_key[key_b] = b
+        adjacency_sets[key_a].add(key_b)
+        adjacency_sets[key_b].add(key_a)
+
+    adjacency = {key: sorted(neighbors) for key, neighbors in adjacency_sets.items()}
+    visited: set[Vertex] = set()
+    loops: List[Dict[str, Any]] = []
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+        stack = [start]
+        component_keys: List[Vertex] = []
+        visited.add(start)
+        while stack:
+            key = stack.pop()
+            component_keys.append(key)
+            for neighbor in adjacency[key]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+
+        ordered_keys = _ordered_cycle(component_keys, adjacency)
+        closed = ordered_keys is not None
+        keys_for_geometry = ordered_keys or sorted(component_keys)
+        points = [point_by_key[key] for key in keys_for_geometry]
+        signed_area = _plane_polygon_signed_area(points, origin, x_axis, y_axis) if closed else None
+        area = abs(signed_area) if signed_area is not None else None
+        perimeter = _polyline_perimeter(points, closed)
+        loop_info: Dict[str, Any] = {
+            "closed": closed,
+            "point_count": len(points),
+            "segment_count": sum(len(adjacency[key]) for key in component_keys) // 2,
+            "area": area,
+            "signed_area": signed_area,
+            "perimeter": perimeter,
+            "centroid": _plane_polygon_centroid(points, origin, x_axis, y_axis),
+            "global_bounds": _bounds_for_vertices(points),
+            "plane_bounds": _plane_bounds(points, origin, x_axis, y_axis),
+        }
+        if area is not None and perimeter > 0:
+            loop_info["equivalent_radius"] = math.sqrt(area / math.pi)
+            loop_info["circularity"] = min(1.0, 4.0 * math.pi * area / (perimeter ** 2))
+        else:
+            loop_info["equivalent_radius"] = None
+            loop_info["circularity"] = None
+        if include_points:
+            loop_info["points"] = [
+                {
+                    "global": _vector_to_dict(point),
+                    "plane": {
+                        "u": _plane_coordinates(point, origin, x_axis, y_axis)[0],
+                        "v": _plane_coordinates(point, origin, x_axis, y_axis)[1],
+                    },
+                }
+                for point in points
+            ]
+        loops.append(loop_info)
+    return sorted(loops, key=lambda item: item["area"] or 0.0, reverse=True)
+
+
+def inspect_stl_plane_sections(
+    file_path: str,
+    origin: Any,
+    normal: Any,
+    x_direction: Optional[Any] = None,
+    offsets: Optional[List[float]] = None,
+    round_decimals: int = 5,
+    include_points: bool = False,
+    max_sections: int = 25,
+) -> Dict[str, Any]:
+    """
+    Slices an STL with arbitrary planes, e.g. a tilted front mounting plane.
+    """
+    if not isinstance(round_decimals, int) or round_decimals < 0 or round_decimals > 12:
+        raise ValueError("round_decimals must be an integer from 0 to 12.")
+    if max_sections <= 0:
+        raise ValueError("max_sections must be greater than zero.")
+
+    resolved_path = _resolve_existing_file(file_path)
+    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    base_origin = _coerce_vector(origin, "origin")
+    normal_unit, x_axis, y_axis = _plane_basis(
+        _coerce_vector(normal, "normal"),
+        _coerce_vector(x_direction, "x_direction") if x_direction is not None else None,
+    )
+    section_offsets = [_finite_number(offset, "offsets[]") for offset in (offsets or [0.0])]
+    if len(section_offsets) > max_sections:
+        raise ValueError(f"Requested {len(section_offsets)} plane sections; max_sections is {max_sections}.")
+
+    sections = []
+    for offset in section_offsets:
+        section_origin = _add(base_origin, _scale(normal_unit, offset))
+        segments = _plane_section_segments_for_triangles(
+            triangles,
+            section_origin,
+            normal_unit,
+            round_decimals,
+        )
+        loops = _plane_section_loops(segments, section_origin, x_axis, y_axis, round_decimals, include_points)
+        points = [point for segment in segments for point in segment]
+        sections.append({
+            "offset": offset,
+            "origin": _vector_to_dict(section_origin),
+            "segment_count": len(segments),
+            "point_count": len({_point_key(point, round_decimals) for point in points}),
+            "global_bounds": _bounds_for_vertices(points),
+            "plane_bounds": _plane_bounds(points, section_origin, x_axis, y_axis),
+            "closed_loop_count": sum(1 for loop in loops if loop["closed"]),
+            "open_loop_count": sum(1 for loop in loops if not loop["closed"]),
+            "loops": loops,
+        })
+
+    return {
+        "file": {"path": resolved_path, "format": "stl", "stl_encoding": stl_encoding},
+        "plane": {
+            "origin": _vector_to_dict(base_origin),
+            "normal": _vector_to_dict(normal_unit),
+            "x_direction": _vector_to_dict(x_axis),
+            "y_direction": _vector_to_dict(y_axis),
+        },
+        "sections": sections,
+    }
+
+
+def _ray_triangle_intersection(origin: Vertex, direction: Vertex, triangle: Triangle, epsilon: float = 1e-9) -> Optional[float]:
+    v0, v1, v2 = triangle
+    edge1 = _subtract(v1, v0)
+    edge2 = _subtract(v2, v0)
+    h = _cross(direction, edge2)
+    determinant = _dot(edge1, h)
+    if -epsilon < determinant < epsilon:
+        return None
+    inverse_determinant = 1.0 / determinant
+    s = _subtract(origin, v0)
+    u = inverse_determinant * _dot(s, h)
+    if u < -epsilon or u > 1.0 + epsilon:
+        return None
+    q = _cross(s, edge1)
+    v = inverse_determinant * _dot(direction, q)
+    if v < -epsilon or u + v > 1.0 + epsilon:
+        return None
+    t = inverse_determinant * _dot(edge2, q)
+    if t <= epsilon:
+        return None
+    return t
+
+
+def _point_inside_mesh(point: Vertex, triangles: List[Triangle]) -> bool:
+    direction = _normalize_vector((1.0, 0.3713906763541037, 0.2179280434782609), "ray direction")
+    intersections = []
+    for triangle in triangles:
+        distance = _ray_triangle_intersection(point, direction, triangle)
+        if distance is not None:
+            intersections.append(round(distance, 8))
+    unique_distances = sorted(set(intersections))
+    return len(unique_distances) % 2 == 1
+
+
+def _sample_offsets(width: float, height: float, width_samples: int, height_samples: int) -> List[Tuple[float, float]]:
+    if width_samples <= 0 or height_samples <= 0:
+        raise ValueError("width_samples and height_samples must be greater than zero.")
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be greater than zero.")
+    us = [0.0] if width_samples == 1 else [
+        -width / 2.0 + width * index / (width_samples - 1)
+        for index in range(width_samples)
+    ]
+    vs = [0.0] if height_samples == 1 else [
+        -height / 2.0 + height * index / (height_samples - 1)
+        for index in range(height_samples)
+    ]
+    return [(u, v) for u in us for v in vs]
+
+
+def probe_stl_tunnel(
+    file_path: str,
+    start: Any,
+    end: Any,
+    width: float,
+    height: float,
+    up_direction: Optional[Any] = None,
+    length_samples: int = 15,
+    width_samples: int = 3,
+    height_samples: int = 3,
+    max_blocked_samples: int = 25,
+) -> Dict[str, Any]:
+    """
+    Samples a rectangular corridor through an STL and reports whether material blocks it.
+    """
+    if length_samples <= 1:
+        raise ValueError("length_samples must be greater than one.")
+    if max_blocked_samples < 0:
+        raise ValueError("max_blocked_samples must be non-negative.")
+
+    resolved_path = _resolve_existing_file(file_path)
+    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    start_point = _coerce_vector(start, "start")
+    end_point = _coerce_vector(end, "end")
+    probe_width = _finite_number(width, "width")
+    probe_height = _finite_number(height, "height")
+    path_vector = _subtract(end_point, start_point)
+    path_length = _length(path_vector)
+    if path_length <= 1e-12:
+        raise ValueError("start and end must be different points.")
+    path_axis = _normalize_vector(path_vector, "path")
+    up_seed = _coerce_vector(up_direction, "up_direction") if up_direction is not None else (0.0, 0.0, 1.0)
+    if abs(_dot(_normalize_vector(up_seed, "up_direction"), path_axis)) > 0.98:
+        up_seed = (1.0, 0.0, 0.0)
+    side_axis = _normalize_vector(_cross(path_axis, up_seed), "side direction")
+    up_axis = _normalize_vector(_cross(side_axis, path_axis), "up direction")
+    sample_offsets = _sample_offsets(
+        probe_width,
+        probe_height,
+        width_samples,
+        height_samples,
+    )
+
+    station_summaries = []
+    blocked_samples = []
+    total_samples = 0
+    blocked_count = 0
+    for station_index in range(length_samples):
+        t = station_index / (length_samples - 1)
+        center = _add(start_point, _scale(path_vector, t))
+        station_blocked = 0
+        for side_offset, up_offset in sample_offsets:
+            sample_point = _add(center, _add(_scale(side_axis, side_offset), _scale(up_axis, up_offset)))
+            total_samples += 1
+            inside_material = _point_inside_mesh(sample_point, triangles)
+            if inside_material:
+                blocked_count += 1
+                station_blocked += 1
+                if len(blocked_samples) < max_blocked_samples:
+                    blocked_samples.append({
+                        "station_index": station_index,
+                        "t": t,
+                        "point": _vector_to_dict(sample_point),
+                        "side_offset": side_offset,
+                        "up_offset": up_offset,
+                    })
+        station_summaries.append({
+            "station_index": station_index,
+            "t": t,
+            "center": _vector_to_dict(center),
+            "blocked_samples": station_blocked,
+            "sample_count": len(sample_offsets),
+            "clear": station_blocked == 0,
+        })
+
+    return {
+        "file": {"path": resolved_path, "format": "stl", "stl_encoding": stl_encoding},
+        "path": {
+            "start": _vector_to_dict(start_point),
+            "end": _vector_to_dict(end_point),
+            "length": path_length,
+            "axis": _vector_to_dict(path_axis),
+            "side_direction": _vector_to_dict(side_axis),
+            "up_direction": _vector_to_dict(up_axis),
+            "width": probe_width,
+            "height": probe_height,
+        },
+        "sample_count": total_samples,
+        "blocked_sample_count": blocked_count,
+        "clear_sample_count": total_samples - blocked_count,
+        "clear": blocked_count == 0,
+        "start_clear": station_summaries[0]["clear"],
+        "end_clear": station_summaries[-1]["clear"],
+        "blocked_samples": blocked_samples,
+        "stations": station_summaries,
     }
 
 

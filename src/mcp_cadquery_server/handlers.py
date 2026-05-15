@@ -25,8 +25,10 @@ from src.mcp_cadquery_server.core import (
     transform_stl_mesh as core_transform_stl_mesh,
     compare_stl_meshes as core_compare_stl_meshes,
     inspect_stl_sections as core_inspect_stl_sections,
+    inspect_stl_plane_sections as core_inspect_stl_plane_sections,
     detect_mount_features as core_detect_mount_features,
     validate_stl_solid as core_validate_stl_solid,
+    probe_stl_tunnel as core_probe_stl_tunnel,
 )
 
 from src.mcp_cadquery_server.models import (
@@ -36,8 +38,10 @@ from src.mcp_cadquery_server.models import (
     TransformStlMeshArgs,
     CompareStlMeshesArgs,
     InspectStlSectionsArgs,
+    InspectStlPlaneSectionsArgs,
     DetectMountFeaturesArgs,
     ValidateStlSolidArgs,
+    ProbeStlTunnelArgs,
 )
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
@@ -354,6 +358,35 @@ def handle_inspect_stl_sections(request: dict) -> dict:
         raise Exception(error_msg)
 
 
+def handle_inspect_stl_plane_sections(request: dict) -> dict:
+    """
+    Slice an STL with tilted planes through MCP to measure mount-face loops, hole bounds, and clearances.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling inspect_stl_plane_sections request (ID: {request_id})")
+    try:
+        args = InspectStlPlaneSectionsArgs(**request.get("arguments", {}))
+        section_result = core_inspect_stl_plane_sections(
+            file_path=args.file_path,
+            origin=args.origin,
+            normal=args.normal,
+            x_direction=args.x_direction,
+            offsets=args.offsets,
+            round_decimals=args.round_decimals,
+            include_points=args.include_points,
+            max_sections=args.max_sections,
+        )
+        return {
+            "success": True,
+            "message": "STL tilted plane sections inspected successfully.",
+            "sections": section_result,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL tilted plane section inspection: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
 def handle_detect_mount_features(request: dict) -> dict:
     """
     Detect mounting hole/slot candidates from STL section loops through MCP.
@@ -405,6 +438,37 @@ def handle_validate_stl_solid(request: dict) -> dict:
         }
     except Exception as e:
         error_msg = f"Error during STL solid validation: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_probe_stl_tunnel(request: dict) -> dict:
+    """
+    Probe an STL tunnel/cable channel through MCP to verify a rectangular passage is clear.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling probe_stl_tunnel request (ID: {request_id})")
+    try:
+        args = ProbeStlTunnelArgs(**request.get("arguments", {}))
+        tunnel = core_probe_stl_tunnel(
+            file_path=args.file_path,
+            start=args.start,
+            end=args.end,
+            width=args.width,
+            height=args.height,
+            up_direction=args.up_direction,
+            length_samples=args.length_samples,
+            width_samples=args.width_samples,
+            height_samples=args.height_samples,
+            max_blocked_samples=args.max_blocked_samples,
+        )
+        return {
+            "success": True,
+            "message": "STL tunnel probe completed.",
+            "tunnel": tunnel,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL tunnel probe: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
@@ -985,8 +1049,10 @@ tool_handlers = {
     "transform_stl_mesh": handle_transform_stl_mesh,
     "compare_stl_meshes": handle_compare_stl_meshes,
     "inspect_stl_sections": handle_inspect_stl_sections,
+    "inspect_stl_plane_sections": handle_inspect_stl_plane_sections,
     "detect_mount_features": handle_detect_mount_features,
     "validate_stl_solid": handle_validate_stl_solid,
+    "probe_stl_tunnel": handle_probe_stl_tunnel,
     "scan_part_library": handle_scan_part_library,
     "search_parts": handle_search_parts,
     "launch_cq_editor": handle_launch_cq_editor,
