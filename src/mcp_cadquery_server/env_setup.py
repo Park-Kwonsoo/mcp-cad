@@ -8,6 +8,7 @@ from typing import Optional
 # Constants for environment setup
 VENV_DIR = ".venv"
 PYTHON_VERSION = "3.11"
+BASE_WORKSPACE_PACKAGES = ["cadquery==2.5.2"]
 
 # Cache for workspace requirements.txt modification times
 workspace_reqs_mtime_cache: dict[str, float] = {}
@@ -120,13 +121,13 @@ def prepare_workspace_env(workspace_path: str) -> str:
             logging.error(f"[{log_prefix}] {msg}")
             raise RuntimeError(msg)
 
-        # 4. Install base cadquery once per server process for an already-seen env.
+        # 4. Install base CadQuery packages once per server process for an already-seen env.
         if created_venv or cached_signature is None or cached_signature[0] != python_exe:
-            logging.info(f"[{log_prefix}] Ensuring base 'cadquery' package is installed in {venv_dir}...")
-            _run_command_helper(["uv", "pip", "install", "cadquery", "--python", python_exe], log_prefix=log_prefix)
-            logging.info(f"[{log_prefix}] Base 'cadquery' installed/verified.")
+            logging.info(f"[{log_prefix}] Ensuring base CadQuery packages are installed in {venv_dir}...")
+            _run_command_helper(["uv", "pip", "install", *BASE_WORKSPACE_PACKAGES, "--python", python_exe], log_prefix=log_prefix)
+            logging.info(f"[{log_prefix}] Base CadQuery packages installed/verified.")
         else:
-            logging.info(f"[{log_prefix}] Base 'cadquery' already verified for this server process.")
+            logging.info(f"[{log_prefix}] Base CadQuery packages already verified for this server process.")
 
         # 5. Handle workspace requirements.txt
         install_reqs = False

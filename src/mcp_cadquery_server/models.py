@@ -46,7 +46,7 @@ class BuildAndExportStlArgs(BaseModel):
     workspace_path: str = Field(..., description="Path to the CadQuery workspace directory")
     script: str = Field(
         ...,
-        description="CadQuery Python script generated from a text or image+text design request; must create a printable model",
+        description="CadQuery Python script generated from a text or image+text design request; must create one printable model with real CadQuery boolean unions/cuts instead of STL mesh concatenation",
     )
     filename: str = Field(..., description="Target .stl filename or path for the 3D-printer-ready output")
     shape_index: int = Field(0, description="Index of the generated shape to export as STL")
@@ -55,7 +55,7 @@ class BuildAndExportStlArgs(BaseModel):
 
 
 class AnalyzeCadFileArgs(BaseModel):
-    file_path: str = Field(..., description="Path to an existing STL, STEP/STP, BREP, BIN, or DXF file to inspect before redesign, resizing, or 3D printing")
+    file_path: str = Field(..., description="Path to an existing STL, STEP/STP, BREP, BIN, or DXF file to inspect before redesign, resizing, or 3D printing; STL analysis reports watertightness, non-manifold edges, and disconnected shell counts")
     file_format: Optional[str] = Field(None, description="Optional file format override")
 
 
@@ -67,6 +67,16 @@ class TransformStlMeshArgs(BaseModel):
     translate: Optional[Dict[str, float]] = Field(None, description="Per-axis STL translation after scaling/rotation")
     rotate_degrees: Optional[Dict[str, float]] = Field(None, description="STL Euler rotations in degrees by x/y/z")
     center_at_origin: bool = Field(False, description="Whether to move the transformed STL mesh center to the origin")
+
+
+class CompareStlMeshesArgs(BaseModel):
+    source_file_path: str = Field(..., description="Path to the original/source STL mesh; use this MCP tool instead of ad hoc local Python STL parsing")
+    target_file_path: str = Field(..., description="Path to the generated, redesigned, or transformed STL mesh to compare against the source")
+    source_translate: Optional[Dict[str, float]] = Field(None, description="Optional x/y/z translation applied to the source STL before comparison")
+    target_translate: Optional[Dict[str, float]] = Field(None, description="Optional x/y/z translation applied to the target STL before comparison")
+    round_decimals: int = Field(5, description="Decimal places used when matching STL triangles")
+    z_thresholds: Optional[List[float]] = Field(None, description="Optional z-height thresholds for per-region retained/added/removed triangle counts")
+    target_only_z_ranges: Optional[List[Dict[str, float]]] = Field(None, description="Optional ranges like {'min_z': 8, 'max_z': 22.1} for bounds of target-only geometry")
 
 
 class ScanPartLibraryArgs(BaseModel):

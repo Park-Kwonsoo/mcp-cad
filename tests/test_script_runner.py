@@ -99,6 +99,34 @@ def test_script_runner_success_simple_box(test_workspace):
     assert expected_brep.is_file(), f"Expected BREP file not found at {expected_brep}"
 
 
+def test_script_runner_redirects_script_stdout_to_stderr(test_workspace):
+    """User script stdout must not corrupt the runner's JSON stdout."""
+    marker = "stdout-pollution-check"
+    script_content = (
+        f"print('{marker}')\n"
+        "import cadquery as cq\n"
+        "result = cq.Workplane('XY').box(1, 2, 3)\n"
+        "show_object(result, name='stdout_box')"
+    )
+    request_id = f"test-runner-stdout-clean-{uuid.uuid4()}"
+    result_id = f"{request_id}_0"
+    input_data = {
+        "workspace_path": str(test_workspace),
+        "script_content": script_content,
+        "parameters": {},
+        "result_id": result_id
+    }
+
+    process = run_script_runner(input_data, str(test_workspace))
+
+    assert process.returncode == 0, f"Script runner failed unexpectedly. Stderr:\n{process.stderr}"
+    assert marker not in process.stdout
+    assert marker in process.stderr
+    output_json = json.loads(process.stdout)
+    assert output_json["success"] is True
+    assert len(output_json["results"]) == 1
+
+
 def test_script_runner_syntax_error(test_workspace):
     """Test script runner handling of Python syntax errors."""
     script_content = "import cadquery as cq\nresult = cq.Workplane('XY').box(1, 2,"

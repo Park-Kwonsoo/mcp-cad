@@ -3,7 +3,7 @@ import re
 import math
 import struct
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Dict, Any, List, Optional, Tuple
 
 # Import CadQuery-related libraries directly needed by core functions
@@ -396,8 +396,64 @@ def _triangle_signed_volume(triangle: Triangle) -> float:
     ) / 6.0
 
 
+def _triangle_component_sizes(
+    triangle_count: int,
+    triangle_edges: List[List[Tuple[Vertex, Vertex]]],
+    edge_to_triangles: Dict[Tuple[Vertex, Vertex], List[int]],
+) -> List[int]:
+    visited = [False] * triangle_count
+    component_sizes: List[int] = []
+
+    for start_index in range(triangle_count):
+        if visited[start_index]:
+            continue
+
+        stack = [start_index]
+        visited[start_index] = True
+        size = 0
+        while stack:
+            triangle_index = stack.pop()
+            size += 1
+            for edge in triangle_edges[triangle_index]:
+                for neighbor_index in edge_to_triangles[edge]:
+                    if not visited[neighbor_index]:
+                        visited[neighbor_index] = True
+                        stack.append(neighbor_index)
+        component_sizes.append(size)
+
+    return sorted(component_sizes, reverse=True)
+
+
 def _rounded_vertex(vertex: Vertex) -> Vertex:
     return (round(vertex[0], 8), round(vertex[1], 8), round(vertex[2], 8))
+
+
+def _bounds_for_vertices(vertices: List[Vertex]) -> Optional[Dict[str, Any]]:
+    if not vertices:
+        return None
+
+    xs = [vertex[0] for vertex in vertices]
+    ys = [vertex[1] for vertex in vertices]
+    zs = [vertex[2] for vertex in vertices]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    zmin, zmax = min(zs), max(zs)
+    return {
+        "xmin": xmin,
+        "ymin": ymin,
+        "zmin": zmin,
+        "xmax": xmax,
+        "ymax": ymax,
+        "zmax": zmax,
+        "xlen": xmax - xmin,
+        "ylen": ymax - ymin,
+        "zlen": zmax - zmin,
+        "center": {
+            "x": xmin + (xmax - xmin) / 2,
+            "y": ymin + (ymax - ymin) / 2,
+            "z": zmin + (zmax - zmin) / 2,
+        },
+    }
 
 
 def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_path: Optional[str] = None) -> Dict[str, Any]:
@@ -405,30 +461,37 @@ def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_pa
         raise ValueError("Cannot analyze an STL mesh with no triangles.")
 
     vertices = [vertex for triangle in triangles for vertex in triangle]
-    xs = [vertex[0] for vertex in vertices]
-    ys = [vertex[1] for vertex in vertices]
-    zs = [vertex[2] for vertex in vertices]
-    xmin, xmax = min(xs), max(xs)
-    ymin, ymax = min(ys), max(ys)
-    zmin, zmax = min(zs), max(zs)
-    xlen, ylen, zlen = xmax - xmin, ymax - ymin, zmax - zmin
+    bounds = _bounds_for_vertices(vertices)
+    if bounds is None:
+        raise ValueError("Cannot analyze an STL mesh with no vertices.")
 
     edge_counts: Counter[Tuple[Vertex, Vertex]] = Counter()
-    for triangle in triangles:
+    edge_to_triangles: Dict[Tuple[Vertex, Vertex], List[int]] = defaultdict(list)
+    triangle_edges: List[List[Tuple[Vertex, Vertex]]] = []
+    for triangle_index, triangle in enumerate(triangles):
         rounded = [_rounded_vertex(vertex) for vertex in triangle]
-        edge_counts[tuple(sorted((rounded[0], rounded[1])))] += 1
-        edge_counts[tuple(sorted((rounded[1], rounded[2])))] += 1
-        edge_counts[tuple(sorted((rounded[2], rounded[0])))] += 1
+        edges = [
+            tuple(sorted((rounded[0], rounded[1]))),
+            tuple(sorted((rounded[1], rounded[2]))),
+            tuple(sorted((rounded[2], rounded[0]))),
+        ]
+        triangle_edges.append(edges)
+        for edge in edges:
+            edge_counts[edge] += 1
+            edge_to_triangles[edge].append(triangle_index)
 
     boundary_edges = sum(1 for count in edge_counts.values() if count == 1)
     non_manifold_edges = sum(1 for count in edge_counts.values() if count > 2)
     watertight = boundary_edges == 0 and non_manifold_edges == 0
+    component_sizes = _triangle_component_sizes(len(triangles), triangle_edges, edge_to_triangles)
     signed_volume = sum(_triangle_signed_volume(triangle) for triangle in triangles)
     absolute_tetra_volume = sum(abs(_triangle_signed_volume(triangle)) for triangle in triangles)
 
     warnings = []
     if not watertight:
         warnings.append("Volume is only reliable for closed, consistently oriented STL meshes.")
+    if len(component_sizes) > 1:
+        warnings.append("STL contains multiple disconnected mesh components; this can indicate concatenated solids instead of a boolean union.")
 
     result: Dict[str, Any] = {
         "analysis_type": "stl_mesh",
@@ -443,22 +506,7 @@ def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_pa
             "vertex_count": len(vertices),
             "unique_vertex_count": len({_rounded_vertex(vertex) for vertex in vertices}),
         },
-        "bounding_box": {
-            "xmin": xmin,
-            "ymin": ymin,
-            "zmin": zmin,
-            "xmax": xmax,
-            "ymax": ymax,
-            "zmax": zmax,
-            "xlen": xlen,
-            "ylen": ylen,
-            "zlen": zlen,
-            "center": {
-                "x": xmin + xlen / 2,
-                "y": ymin + ylen / 2,
-                "z": zmin + zlen / 2,
-            },
-        },
+        "bounding_box": bounds,
         "measurements": {
             "surface_area": sum(_triangle_area(triangle) for triangle in triangles),
             "signed_volume": signed_volume,
@@ -471,6 +519,10 @@ def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_pa
             "boundary_edge_count": boundary_edges,
             "non_manifold_edge_count": non_manifold_edges,
             "watertight": watertight,
+            "connected_component_count": len(component_sizes),
+            "largest_component_triangle_count": component_sizes[0],
+            "smallest_component_triangle_count": component_sizes[-1],
+            "component_triangle_counts_sample": component_sizes[:20],
         },
         "warnings": warnings,
     }
@@ -519,6 +571,176 @@ def analyze_cad_file(file_path: str, file_format: Optional[str] = None) -> Dict[
         "properties": get_shape_properties(shape),
         "description": description,
         "warnings": warnings,
+    }
+
+
+def _translated_triangle(triangle: Triangle, translate: Dict[str, float]) -> Triangle:
+    return tuple(_translate_vertex(vertex, translate) for vertex in triangle)
+
+
+def _triangle_compare_key(triangle: Triangle, round_decimals: int) -> Tuple[Vertex, Vertex, Vertex]:
+    return tuple(sorted(
+        (
+            round(vertex[0], round_decimals),
+            round(vertex[1], round_decimals),
+            round(vertex[2], round_decimals),
+        )
+        for vertex in triangle
+    ))
+
+
+def _stl_compare_items(
+    triangles: List[Triangle],
+    translate: Dict[str, float],
+    round_decimals: int,
+) -> List[Dict[str, Any]]:
+    return [
+        {
+            "key": _triangle_compare_key(translated_triangle, round_decimals),
+            "triangle": translated_triangle,
+        }
+        for translated_triangle in (
+            _translated_triangle(triangle, translate)
+            for triangle in triangles
+        )
+    ]
+
+
+def _counter_for_items(items: List[Dict[str, Any]]) -> Counter:
+    return Counter(item["key"] for item in items)
+
+
+def _triangle_counter_difference_vertices(
+    items: List[Dict[str, Any]],
+    difference_counter: Counter,
+) -> List[Vertex]:
+    remaining = difference_counter.copy()
+    vertices: List[Vertex] = []
+    for item in items:
+        key = item["key"]
+        if remaining[key] <= 0:
+            continue
+        vertices.extend(item["triangle"])
+        remaining[key] -= 1
+    return vertices
+
+
+def _threshold_compare_summary(
+    source_items: List[Dict[str, Any]],
+    target_items: List[Dict[str, Any]],
+    threshold: float,
+) -> Dict[str, Any]:
+    source_counter = _counter_for_items([
+        item for item in source_items
+        if max(vertex[2] for vertex in item["triangle"]) > threshold
+    ])
+    target_counter = _counter_for_items([
+        item for item in target_items
+        if max(vertex[2] for vertex in item["triangle"]) > threshold
+    ])
+    source_only = source_counter - target_counter
+    target_only = target_counter - source_counter
+    shared_count = sum((source_counter & target_counter).values())
+    return {
+        "max_z_greater_than": threshold,
+        "source_triangles": sum(source_counter.values()),
+        "target_triangles": sum(target_counter.values()),
+        "shared_triangles": shared_count,
+        "source_only_triangles": sum(source_only.values()),
+        "target_only_triangles": sum(target_only.values()),
+    }
+
+
+def compare_stl_meshes(
+    source_file_path: str,
+    target_file_path: str,
+    source_translate: Optional[Dict[str, float]] = None,
+    target_translate: Optional[Dict[str, float]] = None,
+    round_decimals: int = 5,
+    z_thresholds: Optional[List[float]] = None,
+    target_only_z_ranges: Optional[List[Dict[str, float]]] = None,
+) -> Dict[str, Any]:
+    """
+    Compares two STL meshes by rounded triangle geometry, with optional translations.
+    Useful for validating redesigns, dimension edits, retained source geometry,
+    and new/removed triangle regions without writing ad hoc Python scripts.
+    """
+    if not isinstance(round_decimals, int) or round_decimals < 0 or round_decimals > 12:
+        raise ValueError("round_decimals must be an integer from 0 to 12.")
+
+    source_path = _resolve_existing_file(source_file_path)
+    target_path = _resolve_existing_file(target_file_path)
+    source_triangles, source_encoding = _read_stl_triangles(source_path)
+    target_triangles, target_encoding = _read_stl_triangles(target_path)
+
+    source_translate_values = _axis_mapping(source_translate, 0.0, "source_translate")
+    target_translate_values = _axis_mapping(target_translate, 0.0, "target_translate")
+    source_items = _stl_compare_items(source_triangles, source_translate_values, round_decimals)
+    target_items = _stl_compare_items(target_triangles, target_translate_values, round_decimals)
+
+    source_counter = _counter_for_items(source_items)
+    target_counter = _counter_for_items(target_items)
+    shared_counter = source_counter & target_counter
+    source_only_counter = source_counter - target_counter
+    target_only_counter = target_counter - source_counter
+
+    source_count = len(source_triangles)
+    target_count = len(target_triangles)
+    shared_count = sum(shared_counter.values())
+    source_only_count = sum(source_only_counter.values())
+    target_only_count = sum(target_only_counter.values())
+    target_only_vertices = _triangle_counter_difference_vertices(target_items, target_only_counter)
+    source_only_vertices = _triangle_counter_difference_vertices(source_items, source_only_counter)
+
+    threshold_summaries = [
+        _threshold_compare_summary(source_items, target_items, _finite_number(threshold, "z_thresholds[]"))
+        for threshold in (z_thresholds or [])
+    ]
+
+    range_summaries = []
+    for index, z_range in enumerate(target_only_z_ranges or []):
+        if not isinstance(z_range, dict):
+            raise ValueError("target_only_z_ranges entries must be objects with min_z and max_z.")
+        min_z = _finite_number(z_range.get("min_z"), f"target_only_z_ranges[{index}].min_z")
+        max_z = _finite_number(z_range.get("max_z"), f"target_only_z_ranges[{index}].max_z")
+        if min_z > max_z:
+            raise ValueError(f"target_only_z_ranges[{index}].min_z must be <= max_z.")
+        vertices_in_range = [
+            vertex for vertex in target_only_vertices
+            if min_z <= vertex[2] <= max_z
+        ]
+        range_summaries.append({
+            "min_z": min_z,
+            "max_z": max_z,
+            "vertex_count": len(vertices_in_range),
+            "bounds": _bounds_for_vertices(vertices_in_range),
+        })
+
+    return {
+        "source": {
+            "file": source_path,
+            "stl_encoding": source_encoding,
+            "triangle_count": source_count,
+        },
+        "target": {
+            "file": target_path,
+            "stl_encoding": target_encoding,
+            "triangle_count": target_count,
+        },
+        "comparison": {
+            "round_decimals": round_decimals,
+            "source_translate": source_translate_values,
+            "target_translate": target_translate_values,
+            "shared_triangles": shared_count,
+            "source_only_triangles": source_only_count,
+            "target_only_triangles": target_only_count,
+            "source_retained_ratio": shared_count / source_count if source_count else None,
+            "target_reused_ratio": shared_count / target_count if target_count else None,
+        },
+        "source_only_vertex_bounds": _bounds_for_vertices(source_only_vertices),
+        "target_only_vertex_bounds": _bounds_for_vertices(target_only_vertices),
+        "z_thresholds": threshold_summaries,
+        "target_only_z_ranges": range_summaries,
     }
 
 

@@ -561,6 +561,43 @@ def test_process_tool_request_transform_stl_mesh(mock_transform):
     )
 
 
+@patch('src.mcp_cadquery_server.handlers.core_compare_stl_meshes')
+def test_process_tool_request_compare_stl_meshes(mock_compare):
+    """Test direct compare_stl_meshes tool processing."""
+    mock_compare.return_value = {
+        "comparison": {
+            "shared_triangles": 10,
+            "source_only_triangles": 2,
+            "target_only_triangles": 3,
+        }
+    }
+
+    response = process_tool_request({
+        "request_id": "test-compare",
+        "tool_name": "compare_stl_meshes",
+        "arguments": {
+            "source_file_path": "/tmp/original.stl",
+            "target_file_path": "/tmp/final.stl",
+            "source_translate": {"z": 5.0},
+            "z_thresholds": [22.001, 24.0],
+            "target_only_z_ranges": [{"min_z": 8.0, "max_z": 22.1}],
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["comparison"]["comparison"]["target_only_triangles"] == 3
+    mock_compare.assert_called_once_with(
+        source_file_path="/tmp/original.stl",
+        target_file_path="/tmp/final.stl",
+        source_translate={"z": 5.0},
+        target_translate=None,
+        round_decimals=5,
+        z_thresholds=[22.001, 24.0],
+        target_only_z_ranges=[{"min_z": 8.0, "max_z": 22.1}],
+    )
+
+
 @patch('src.mcp_cadquery_server.handlers.core_analyze_cad_file')
 @patch('src.mcp_cadquery_server.handlers.handle_export_shape')
 @patch('src.mcp_cadquery_server.handlers.handle_execute_cadquery_script')
@@ -1440,9 +1477,10 @@ def test_stdio_mode_lists_mcp_tools():
         assert all("inputSchema" in tool for tool in tools_response["result"]["tools"])
         tools_by_name = {tool["name"]: tool for tool in tools_response["result"]["tools"]}
         assert "create_printable_stl" in tools_by_name
-        assert "3D STL" in tools_by_name["create_printable_stl"]["description"]
-        assert "3D-printer-ready STL" in tools_by_name["build_and_export_stl"]["description"]
-        assert "3D printing" in tools_by_name["transform_stl_mesh"]["description"]
+        assert "instead of local shell Python" in tools_by_name["create_printable_stl"]["description"]
+        assert "not STL mesh concatenation" in tools_by_name["build_and_export_stl"]["description"]
+        assert "dimension edits" in tools_by_name["transform_stl_mesh"]["description"]
+        assert "Compare two STL files through MCP" in tools_by_name["compare_stl_meshes"]["description"]
 
     finally:
         # Ensure the subprocess is cleaned up robustly
