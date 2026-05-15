@@ -1,16 +1,12 @@
 # This module contains all tool handler functions and the tool_handlers dict
 
-# Import necessary modules
 import os
-import sys
 import uuid
 import subprocess
 import ast
-import re # Added for scan_part_library
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 import cadquery as cq
-from cadquery import cqgi
 
 from src.mcp_cadquery_server.env_setup import (
     prepare_workspace_env,
@@ -19,6 +15,7 @@ from src.mcp_cadquery_server.env_setup import (
     workspace_reqs_mtime_cache,
 )
 from src.mcp_cadquery_server.core import (
+    execute_cqgi_script,
     export_shape_to_file,
     export_shape_to_svg_file,
     parse_docstring_metadata,
@@ -29,6 +26,7 @@ from src.mcp_cadquery_server.core import (
 from src.mcp_cadquery_server.models import ExecuteCadqueryScriptArgs
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
+from . import state
 # Import shared state and config
 from .state import (
     log,
@@ -36,13 +34,7 @@ from .state import (
     part_index,
     DEFAULT_PART_LIBRARY_DIR,
     DEFAULT_OUTPUT_DIR_NAME,
-    DEFAULT_PART_PREVIEW_DIR_NAME,
     DEFAULT_RENDER_DIR_NAME,
-    ACTIVE_PART_LIBRARY_DIR, # Use active config paths
-    ACTIVE_OUTPUT_DIR_PATH,
-    ACTIVE_RENDER_DIR_PATH,
-    ACTIVE_PART_PREVIEW_DIR_PATH,
-    ACTIVE_STATIC_DIR,
 )
 
 def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScriptArgs, str]:
@@ -269,17 +261,17 @@ def handle_export_shape_to_svg(request: dict) -> dict:
         output_path = os.path.join(render_dir_path, base_filename)
         # Generate a relative URL if static serving is enabled, otherwise just return path
         output_url_or_path = output_path # Default to path
-        if ACTIVE_STATIC_DIR: # Check if static serving is active
+        if state.ACTIVE_STATIC_DIR: # Check if static serving is active
             # Construct URL relative to static dir root
             try:
-                rel_path = os.path.relpath(output_path, ACTIVE_STATIC_DIR)
+                rel_path = os.path.relpath(output_path, state.ACTIVE_STATIC_DIR)
                 if not rel_path.startswith(".."): # Ensure it's within static dir
                     output_url_or_path = "/" + rel_path.replace(os.sep, "/")
                     log.info(f"Generated relative URL for SVG: {output_url_or_path}")
                 else:
-                    log.warning(f"SVG output path '{output_path}' is outside static dir '{ACTIVE_STATIC_DIR}'. Returning absolute path.")
+                    log.warning(f"SVG output path '{output_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
             except ValueError: # Handle case where paths are on different drives (Windows)
-                 log.warning(f"Could not determine relative path for SVG from '{output_path}' to '{ACTIVE_STATIC_DIR}'. Returning absolute path.")
+                 log.warning(f"Could not determine relative path for SVG from '{output_path}' to '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
 
 
         # Default SVG options (can be overridden)
@@ -304,28 +296,34 @@ def handle_scan_part_library(request: dict) -> dict:
     try:
         args = request.get("arguments", {})
         # Use ACTIVE_PART_LIBRARY_DIR if workspace_path not provided
-        workspace_path_arg = args.get("workspace_path", ACTIVE_PART_LIBRARY_DIR)
+        workspace_path_arg = args.get("workspace_path", state.ACTIVE_PART_LIBRARY_DIR)
         if not workspace_path_arg:
             raise ValueError("Missing 'workspace_path' argument and no default library path configured.")
 
         library_path = os.path.abspath(workspace_path_arg)
+        workspace_part_library_path = os.path.join(library_path, DEFAULT_PART_LIBRARY_DIR)
+        if (
+            os.path.isdir(workspace_part_library_path)
+            and not any(name.endswith(".py") and not name.startswith("_") for name in os.listdir(library_path))
+        ):
+            library_path = workspace_part_library_path
         # Use ACTIVE_PART_PREVIEW_DIR_PATH for previews
-        preview_dir_path = ACTIVE_PART_PREVIEW_DIR_PATH
+        preview_dir_path = state.ACTIVE_PART_PREVIEW_DIR_PATH
         if not preview_dir_path:
              raise ValueError("Part preview directory path is not configured.")
 
         # Determine preview URL base if static serving is active
         preview_dir_url_base = None
-        if ACTIVE_STATIC_DIR:
+        if state.ACTIVE_STATIC_DIR:
             try:
-                rel_path = os.path.relpath(preview_dir_path, ACTIVE_STATIC_DIR)
+                rel_path = os.path.relpath(preview_dir_path, state.ACTIVE_STATIC_DIR)
                 if not rel_path.startswith(".."):
                     preview_dir_url_base = "/" + rel_path.replace(os.sep, "/")
                     log.info(f"Using preview URL base: {preview_dir_url_base}")
                 else:
-                    log.warning(f"Preview directory '{preview_dir_path}' is outside static dir '{ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
+                    log.warning(f"Preview directory '{preview_dir_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
             except ValueError:
-                 log.warning(f"Could not determine relative path for preview dir '{preview_dir_path}' to static dir '{ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
+                 log.warning(f"Could not determine relative path for preview dir '{preview_dir_path}' to static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
 
 
         if not os.path.isdir(library_path):
@@ -610,7 +608,6 @@ def handle_get_shape_properties(request: dict) -> dict:
         args = request.get("arguments", {})
         result_id = args.get("result_id")
         shape_index = args.get("shape_index", 0)
-        # workspace_path_arg = args.get("workspace_path") # Optional context
 
         if not result_id: raise ValueError("Missing 'result_id' argument.")
         if not isinstance(shape_index, int) or shape_index < 0: raise ValueError("'shape_index' must be a non-negative integer.")
@@ -657,7 +654,6 @@ def handle_get_shape_description(request: dict) -> dict:
         args = request.get("arguments", {})
         result_id = args.get("result_id")
         shape_index = args.get("shape_index", 0)
-        # workspace_path_arg = args.get("workspace_path") # Optional context
 
         if not result_id: raise ValueError("Missing 'result_id' argument.")
         if not isinstance(shape_index, int) or shape_index < 0: raise ValueError("'shape_index' must be a non-negative integer.")

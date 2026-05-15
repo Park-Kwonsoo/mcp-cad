@@ -7,7 +7,6 @@ import os
 import queue
 import subprocess
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,7 +33,6 @@ class CadQueryWorkerProcess:
         self._io_lock = threading.Lock()
         self._stdout_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
-        self._last_used = time.time()
 
     @property
     def label(self) -> str:
@@ -99,7 +97,6 @@ class CadQueryWorkerProcess:
                     f"CadQuery worker {self.label} returned response for unexpected job ID {response.get('job_id')!r}."
                 )
 
-            self._last_used = time.time()
             result = response.get("result")
             if not isinstance(result, dict):
                 raise WorkerProcessError(f"CadQuery worker {self.label} returned a malformed result.")
