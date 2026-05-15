@@ -23,6 +23,7 @@ from src.mcp_cadquery_server.core import (
     get_shape_description as core_get_shape_description,
     analyze_cad_file as core_analyze_cad_file,
     transform_stl_mesh as core_transform_stl_mesh,
+    compare_stl_meshes as core_compare_stl_meshes,
 )
 
 from src.mcp_cadquery_server.models import (
@@ -30,6 +31,7 @@ from src.mcp_cadquery_server.models import (
     BuildAndExportStlArgs,
     AnalyzeCadFileArgs,
     TransformStlMeshArgs,
+    CompareStlMeshesArgs,
 )
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
@@ -136,7 +138,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
 
 def handle_build_and_export_stl(request: dict) -> dict:
     """
-    Create a 3D-printer-ready STL file from a text or image+text design by running CadQuery Python.
+    Create a 3D-printer-ready STL through MCP/CadQuery; use real boolean union/cut solids, not STL mesh concatenation.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling build_and_export_stl request (ID: {request_id})")
@@ -196,14 +198,14 @@ def handle_build_and_export_stl(request: dict) -> dict:
 
 def handle_create_printable_stl(request: dict) -> dict:
     """
-    Use this for "make/print/output an STL" requests: generate a printable 3D STL via CadQuery.
+    Use this MCP tool for "make/print/output an STL" requests instead of local shell Python or mesh concatenation.
     """
     return handle_build_and_export_stl(request)
 
 
 def handle_analyze_cad_file(request: dict) -> dict:
     """
-    Inspect an existing STL/CAD file before redesign, repair, resizing, or 3D printing.
+    Inspect STL/CAD files through MCP for dimensions, watertightness, non-manifold edges, and disconnected shells.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling analyze_cad_file request (ID: {request_id})")
@@ -223,7 +225,7 @@ def handle_analyze_cad_file(request: dict) -> dict:
 
 def handle_transform_stl_mesh(request: dict) -> dict:
     """
-    Resize or reposition an existing STL for 3D printing by changing dimensions or transforms.
+    Resize or reposition an STL through MCP for dimension edits; verify the result with analyze_cad_file or compare_stl_meshes.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling transform_stl_mesh request (ID: {request_id})")
@@ -245,6 +247,34 @@ def handle_transform_stl_mesh(request: dict) -> dict:
         }
     except Exception as e:
         error_msg = f"Error during STL mesh transform: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_compare_stl_meshes(request: dict) -> dict:
+    """
+    Compare two STL files through MCP to verify redesigns, retained geometry, and added/removed 3D-print mesh regions.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling compare_stl_meshes request (ID: {request_id})")
+    try:
+        args = CompareStlMeshesArgs(**request.get("arguments", {}))
+        comparison = core_compare_stl_meshes(
+            source_file_path=args.source_file_path,
+            target_file_path=args.target_file_path,
+            source_translate=args.source_translate,
+            target_translate=args.target_translate,
+            round_decimals=args.round_decimals,
+            z_thresholds=args.z_thresholds,
+            target_only_z_ranges=args.target_only_z_ranges,
+        )
+        return {
+            "success": True,
+            "message": "STL meshes compared successfully.",
+            "comparison": comparison,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL mesh comparison: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
@@ -823,6 +853,7 @@ tool_handlers = {
     "export_shape_to_svg": handle_export_shape_to_svg,
     "analyze_cad_file": handle_analyze_cad_file,
     "transform_stl_mesh": handle_transform_stl_mesh,
+    "compare_stl_meshes": handle_compare_stl_meshes,
     "scan_part_library": handle_scan_part_library,
     "search_parts": handle_search_parts,
     "launch_cq_editor": handle_launch_cq_editor,

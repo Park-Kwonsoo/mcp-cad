@@ -1,5 +1,6 @@
 """Shared CadQuery execution helpers for one-shot and persistent runners."""
 
+import contextlib
 import json
 import logging
 import os
@@ -49,11 +50,15 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
             _ensure_import_path(modules_dir)
         _ensure_import_path(workspace_path)
 
-        import cadquery as cq
-        from cadquery import cqgi
+        # Worker stdout is reserved for JSON protocol messages. CadQuery imports,
+        # CQGI build hooks, and user scripts may print warnings or diagnostics;
+        # route those to stderr so callers always receive parseable JSON.
+        with contextlib.redirect_stdout(sys.stderr):
+            import cadquery as cq
+            from cadquery import cqgi
 
-        model = cqgi.parse(script_content)
-        build_result = model.build()
+            model = cqgi.parse(script_content)
+            build_result = model.build()
 
         output_result["success"] = build_result.success
         if build_result.exception:
@@ -78,7 +83,8 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(shape_to_export, cq.Assembly):
                         shape_to_export = shape_to_export.toCompound()
 
-                    cq.exporters.export(shape_to_export, intermediate_filepath, exportType="BREP")
+                    with contextlib.redirect_stdout(sys.stderr):
+                        cq.exporters.export(shape_to_export, intermediate_filepath, exportType="BREP")
                     shape_info["intermediate_path"] = intermediate_filepath
                 except Exception as export_err:
                     log.exception("Failed to export '%s' to BREP.", shape_info["name"])

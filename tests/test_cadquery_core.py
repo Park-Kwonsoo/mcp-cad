@@ -13,6 +13,7 @@ from src.mcp_cadquery_server.core import (
     get_shape_description,
     analyze_cad_file,
     transform_stl_mesh,
+    compare_stl_meshes,
 )
 
 
@@ -48,6 +49,115 @@ def _write_tetrahedron_stl(path):
     endloop
   endfacet
 endsolid tetrahedron
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_shifted_tetrahedron_with_extra_stl(path):
+    path.write_text(
+        """solid shifted_tetrahedron_with_extra
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 5
+      vertex 0 1 5
+      vertex 1 0 5
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 5
+      vertex 1 0 5
+      vertex 0 0 6
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 5
+      vertex 0 0 6
+      vertex 0 1 5
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 1 0 5
+      vertex 0 1 5
+      vertex 0 0 6
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 10 10
+      vertex 11 10 10
+      vertex 10 11 10
+    endloop
+  endfacet
+endsolid shifted_tetrahedron_with_extra
+""",
+        encoding="utf-8",
+    )
+
+
+def _write_two_disconnected_tetrahedrons_stl(path):
+    path.write_text(
+        """solid two_tetrahedrons
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 1 0
+      vertex 1 0 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 1 0 0
+      vertex 0 0 1
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 0 1
+      vertex 0 1 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 1 0 0
+      vertex 0 1 0
+      vertex 0 0 1
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 0 0
+      vertex 10 1 0
+      vertex 11 0 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 0 0
+      vertex 11 0 0
+      vertex 10 0 1
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 10 0 0
+      vertex 10 0 1
+      vertex 10 1 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 11 0 0
+      vertex 10 1 0
+      vertex 10 0 1
+    endloop
+  endfacet
+endsolid two_tetrahedrons
 """,
         encoding="utf-8",
     )
@@ -389,9 +499,23 @@ def test_analyze_cad_file_ascii_stl(tmp_path):
     assert analysis["mesh"]["triangle_count"] == 4
     assert analysis["mesh"]["unique_vertex_count"] == 4
     assert analysis["topology"]["watertight"] is True
+    assert analysis["topology"]["connected_component_count"] == 1
     assert analysis["bounding_box"]["xlen"] == pytest.approx(1.0)
     assert analysis["bounding_box"]["ylen"] == pytest.approx(1.0)
     assert analysis["bounding_box"]["zlen"] == pytest.approx(1.0)
+
+
+def test_analyze_cad_file_warns_on_disconnected_components(tmp_path):
+    """Detect STL files made by concatenating separate closed solids."""
+    stl_path = tmp_path / "two_tetrahedrons.stl"
+    _write_two_disconnected_tetrahedrons_stl(stl_path)
+
+    analysis = analyze_cad_file(str(stl_path))
+
+    assert analysis["topology"]["watertight"] is True
+    assert analysis["topology"]["connected_component_count"] == 2
+    assert analysis["topology"]["component_triangle_counts_sample"] == [4, 4]
+    assert any("multiple disconnected mesh components" in warning for warning in analysis["warnings"])
 
 
 def test_transform_stl_mesh_target_size(tmp_path):
@@ -413,6 +537,41 @@ def test_transform_stl_mesh_target_size(tmp_path):
     assert result["after"]["bounding_box"]["ylen"] == pytest.approx(3.0)
     assert result["after"]["bounding_box"]["zlen"] == pytest.approx(4.0)
     assert result["after"]["topology"]["watertight"] is True
+
+
+def test_compare_stl_meshes_with_translation_and_extra_region(tmp_path):
+    """Test direct STL-to-STL comparison without ad hoc Python scripts."""
+    source_path = tmp_path / "source.stl"
+    target_path = tmp_path / "target.stl"
+    _write_tetrahedron_stl(source_path)
+    _write_shifted_tetrahedron_with_extra_stl(target_path)
+
+    result = compare_stl_meshes(
+        str(source_path),
+        str(target_path),
+        source_translate={"z": 5.0},
+        z_thresholds=[5.5, 9.0],
+        target_only_z_ranges=[{"min_z": 9.0, "max_z": 11.0}],
+    )
+
+    assert result["source"]["triangle_count"] == 4
+    assert result["target"]["triangle_count"] == 5
+    assert result["comparison"]["shared_triangles"] == 4
+    assert result["comparison"]["source_only_triangles"] == 0
+    assert result["comparison"]["target_only_triangles"] == 1
+    assert result["comparison"]["source_retained_ratio"] == pytest.approx(1.0)
+    assert result["comparison"]["target_reused_ratio"] == pytest.approx(0.8)
+
+    assert result["z_thresholds"][0]["max_z_greater_than"] == pytest.approx(5.5)
+    assert result["z_thresholds"][0]["source_triangles"] == 3
+    assert result["z_thresholds"][0]["target_triangles"] == 4
+    assert result["z_thresholds"][0]["target_only_triangles"] == 1
+    assert result["z_thresholds"][1]["target_only_triangles"] == 1
+
+    extra_range = result["target_only_z_ranges"][0]
+    assert extra_range["vertex_count"] == 3
+    assert extra_range["bounds"]["zmin"] == pytest.approx(10.0)
+    assert extra_range["bounds"]["xmax"] == pytest.approx(11.0)
 
 
 def test_analyze_cad_file_unsupported_format(tmp_path):
