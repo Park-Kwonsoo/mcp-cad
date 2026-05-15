@@ -3,18 +3,54 @@ import pytest
 import cadquery as cq
 from cadquery import exporters
 import sys
-from unittest.mock import patch, MagicMock, PropertyMock
-
-
-
-# Define output directory for test artifacts
-TEST_OUTPUT_DIR = "test_output"
-os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
+from unittest.mock import patch
 
 # Add project root to path to allow importing src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.mcp_cadquery_server.core import get_shape_properties, get_shape_description
+from src.mcp_cadquery_server.core import (
+    get_shape_properties,
+    get_shape_description,
+    analyze_cad_file,
+    transform_stl_mesh,
+)
+
+
+def _write_tetrahedron_stl(path):
+    path.write_text(
+        """solid tetrahedron
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 1 0
+      vertex 1 0 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 1 0 0
+      vertex 0 0 1
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 0 0 0
+      vertex 0 0 1
+      vertex 0 1 0
+    endloop
+  endfacet
+  facet normal 0 0 0
+    outer loop
+      vertex 1 0 0
+      vertex 0 1 0
+      vertex 0 0 1
+    endloop
+  endfacet
+endsolid tetrahedron
+""",
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -34,15 +70,15 @@ def test_create_simple_box(simple_box):
     assert simple_box.val().isValid(), "Box solid is not valid"
     print("Box creation test passed.")
 
-def test_export_box_svg(simple_box):
+def test_export_box_svg(simple_box, tmp_path):
     """Test exporting the box to SVG."""
     print("\nTesting SVG export...")
-    output_filename = os.path.join(TEST_OUTPUT_DIR, "test_box.svg")
+    output_filename = tmp_path / "test_box.svg"
     svg_options = {"projectionDir": (0.5, 0.5, 0.5)} # Example options
 
     try:
         print(f"Exporting SVG to {output_filename}...")
-        exporters.export(simple_box.val(), output_filename, exportType='SVG', opt=svg_options)
+        exporters.export(simple_box.val(), str(output_filename), exportType='SVG', opt=svg_options)
         print("SVG export function called.")
 
         assert os.path.exists(output_filename), f"SVG file '{output_filename}' was not created."
@@ -338,3 +374,50 @@ def test_get_shape_properties_generic_exception(mock_log_info, simple_box): # Re
     assert "Unexpected Core Error" in str(excinfo.value)
     # Logging check removed for simplicity, focus on raising the exception
     print("get_shape_properties generic exception test passed.")
+
+
+def test_analyze_cad_file_ascii_stl(tmp_path):
+    """Test direct analysis of an ASCII STL file."""
+    stl_path = tmp_path / "tetrahedron.stl"
+    _write_tetrahedron_stl(stl_path)
+
+    analysis = analyze_cad_file(str(stl_path))
+
+    assert analysis["analysis_type"] == "stl_mesh"
+    assert analysis["file"]["format"] == "stl"
+    assert analysis["file"]["stl_encoding"] == "ascii"
+    assert analysis["mesh"]["triangle_count"] == 4
+    assert analysis["mesh"]["unique_vertex_count"] == 4
+    assert analysis["topology"]["watertight"] is True
+    assert analysis["bounding_box"]["xlen"] == pytest.approx(1.0)
+    assert analysis["bounding_box"]["ylen"] == pytest.approx(1.0)
+    assert analysis["bounding_box"]["zlen"] == pytest.approx(1.0)
+
+
+def test_transform_stl_mesh_target_size(tmp_path):
+    """Test resizing an STL mesh to target bounding-box dimensions."""
+    stl_path = tmp_path / "source.stl"
+    output_path = tmp_path / "resized.stl"
+    _write_tetrahedron_stl(stl_path)
+
+    result = transform_stl_mesh(
+        str(stl_path),
+        str(output_path),
+        target_size={"x": 2.0, "y": 3.0, "z": 4.0},
+        center_at_origin=True,
+    )
+
+    assert output_path.exists()
+    assert result["applied_transform"]["scale"] == {"x": 2.0, "y": 3.0, "z": 4.0}
+    assert result["after"]["bounding_box"]["xlen"] == pytest.approx(2.0)
+    assert result["after"]["bounding_box"]["ylen"] == pytest.approx(3.0)
+    assert result["after"]["bounding_box"]["zlen"] == pytest.approx(4.0)
+    assert result["after"]["topology"]["watertight"] is True
+
+
+def test_analyze_cad_file_unsupported_format(tmp_path):
+    unsupported_path = tmp_path / "model.obj"
+    unsupported_path.write_text("not supported", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported CAD file format"):
+        analyze_cad_file(str(unsupported_path))
