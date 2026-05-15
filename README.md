@@ -161,6 +161,8 @@ The `scan_part_library` and `search_parts` tools operate on the currently config
     *   `arguments`: `{"query": "search term"}`
 *   `export_shape`: (Generic export) Exports a shape to a specified file format and path on the server.
     *   `arguments`: `{"result_id": "...", "shape_index": 0, "filename": "output/path/model.step", "format": "STEP", "options": {...}}`
+*   `render_stl_preview`: Renders an STL into a dependency-free SVG contact sheet for visual repair/review checks.
+    *   `arguments`: `{"file_path": "input/model.stl", "output_path": "output/model_preview.svg", "views": ["top", "front", "right", "iso"], "width": 1200, "height": 900, "show_edges": true}`
 
 *(Note: Tool arguments and return values are subject to change.)*
 

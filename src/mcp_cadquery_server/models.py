@@ -114,6 +114,16 @@ class DetectMountFeaturesArgs(BaseModel):
     round_decimals: int = Field(5, description="Decimal places used when connecting section segments into loops")
 
 
+class RenderStlPreviewArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file to render into a visual preview image through MCP")
+    output_path: str = Field(..., description="Target .svg path for the rendered STL visual preview")
+    views: Optional[List[str]] = Field(None, description="Preview views to include: top, front, right, iso. Defaults to all four.")
+    width: int = Field(1200, description="SVG preview width in pixels")
+    height: int = Field(900, description="SVG preview height in pixels")
+    margin: int = Field(24, description="Panel margin in pixels")
+    show_edges: bool = Field(True, description="Draw triangle edges over shaded faces")
+
+
 class ValidateStlSolidArgs(BaseModel):
     file_path: str = Field(..., description="Path to an STL file to validate as a printable solid through MCP")
     allow_multiple_components: bool = Field(False, description="Allow disconnected shells when the design intentionally has multiple printable components")

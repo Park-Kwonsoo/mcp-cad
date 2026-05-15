@@ -32,9 +32,11 @@
 *   `execute_cqgi_script(script_content)`: Core logic for running CQGI script.
 *   `export_shape_to_file(shape, output_path, format, opts)`: Core logic for generic shape export.
 *   `export_shape_to_svg_file(shape, output_path, opts)`: Core logic for SVG export (uses `export_shape_to_file`).
+*   `render_stl_preview(file_path, output_path, views, width, height, margin, show_edges)`: Core logic for dependency-free STL SVG preview generation.
 *   `handle_execute_cadquery_script(request)`: Handler for script execution tool (handles parameter substitution via string replacement/# PARAM marker).
 *   `handle_export_shape(request)`: Handler for generic export tool.
 *   `handle_export_shape_to_svg(request)`: Handler for SVG export tool.
+*   `handle_render_stl_preview(request)`: Handler for STL visual preview generation.
 *   `handle_scan_part_library(request)`: Handler for scanning/indexing part library (uses mtime caching).
 *   `handle_search_parts(request)`: Handler for searching the part index.
 *   `parse_docstring_metadata(docstring)`: Helper for extracting metadata.
