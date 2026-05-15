@@ -90,6 +90,17 @@ class InspectStlSectionsArgs(BaseModel):
     max_sections: int = Field(50, description="Safety cap for generated section count")
 
 
+class InspectStlPlaneSectionsArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file to slice with arbitrary or tilted planes through MCP")
+    origin: Dict[str, float] = Field(..., description="Plane origin as {'x': ..., 'y': ..., 'z': ...}")
+    normal: Dict[str, float] = Field(..., description="Plane normal direction as {'x': ..., 'y': ..., 'z': ...}")
+    x_direction: Optional[Dict[str, float]] = Field(None, description="Optional in-plane u/x direction for stable mount-face coordinates")
+    offsets: Optional[List[float]] = Field(None, description="Offsets along the plane normal from origin; defaults to [0]")
+    round_decimals: int = Field(5, description="Decimal places used when connecting section segments into loops")
+    include_points: bool = Field(False, description="Whether to include loop point coordinates in the response")
+    max_sections: int = Field(25, description="Safety cap for requested plane sections")
+
+
 class DetectMountFeaturesArgs(BaseModel):
     file_path: str = Field(..., description="Path to an STL file whose mounting holes or slots should be inferred through MCP")
     axis: str = Field("z", description="Axis to scan with section planes, usually z for height-based mount analysis")
@@ -107,6 +118,19 @@ class ValidateStlSolidArgs(BaseModel):
     file_path: str = Field(..., description="Path to an STL file to validate as a printable solid through MCP")
     allow_multiple_components: bool = Field(False, description="Allow disconnected shells when the design intentionally has multiple printable components")
     expected_component_count: Optional[int] = Field(None, description="Optional exact/maximum expected disconnected component count")
+
+
+class ProbeStlTunnelArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file whose cable tunnel or passage should be probed through MCP")
+    start: Dict[str, float] = Field(..., description="Tunnel centerline start point as {'x': ..., 'y': ..., 'z': ...}")
+    end: Dict[str, float] = Field(..., description="Tunnel centerline end point as {'x': ..., 'y': ..., 'z': ...}")
+    width: float = Field(..., description="Required clear tunnel width in model units")
+    height: float = Field(..., description="Required clear tunnel height in model units")
+    up_direction: Optional[Dict[str, float]] = Field(None, description="Optional up direction for the rectangular probe cross-section")
+    length_samples: int = Field(15, description="Number of stations to sample along the tunnel centerline")
+    width_samples: int = Field(3, description="Number of samples across the required tunnel width")
+    height_samples: int = Field(3, description="Number of samples across the required tunnel height")
+    max_blocked_samples: int = Field(25, description="Maximum blocked sample points to return in the response")
 
 
 class ScanPartLibraryArgs(BaseModel):

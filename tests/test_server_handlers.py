@@ -631,6 +631,41 @@ def test_process_tool_request_inspect_stl_sections(mock_inspect):
     )
 
 
+@patch('src.mcp_cadquery_server.handlers.core_inspect_stl_plane_sections')
+def test_process_tool_request_inspect_stl_plane_sections(mock_inspect):
+    """Test direct inspect_stl_plane_sections tool processing."""
+    mock_inspect.return_value = {
+        "sections": [{"offset": 0.0, "closed_loop_count": 3}],
+    }
+
+    response = process_tool_request({
+        "request_id": "test-plane-sections",
+        "tool_name": "inspect_stl_plane_sections",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "origin": {"x": 0.0, "y": 0.0, "z": 20.0},
+            "normal": {"x": 0.0, "y": -0.5, "z": 0.8660254},
+            "x_direction": {"x": 1.0, "y": 0.0, "z": 0.0},
+            "offsets": [0.0, 1.0],
+            "include_points": True,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["sections"]["sections"][0]["closed_loop_count"] == 3
+    mock_inspect.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        origin={"x": 0.0, "y": 0.0, "z": 20.0},
+        normal={"x": 0.0, "y": -0.5, "z": 0.8660254},
+        x_direction={"x": 1.0, "y": 0.0, "z": 0.0},
+        offsets=[0.0, 1.0],
+        round_decimals=5,
+        include_points=True,
+        max_sections=25,
+    )
+
+
 @patch('src.mcp_cadquery_server.handlers.core_detect_mount_features')
 def test_process_tool_request_detect_mount_features(mock_detect):
     """Test direct detect_mount_features tool processing."""
@@ -692,6 +727,45 @@ def test_process_tool_request_validate_stl_solid(mock_validate):
         file_path="/tmp/source.stl",
         allow_multiple_components=False,
         expected_component_count=1,
+    )
+
+
+@patch('src.mcp_cadquery_server.handlers.core_probe_stl_tunnel')
+def test_process_tool_request_probe_stl_tunnel(mock_probe):
+    """Test direct probe_stl_tunnel tool processing."""
+    mock_probe.return_value = {
+        "clear": False,
+        "blocked_sample_count": 2,
+    }
+
+    response = process_tool_request({
+        "request_id": "test-tunnel",
+        "tool_name": "probe_stl_tunnel",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "start": {"x": 0.0, "y": -10.0, "z": 5.0},
+            "end": {"x": 0.0, "y": 10.0, "z": 5.0},
+            "width": 4.0,
+            "height": 3.0,
+            "up_direction": {"x": 0.0, "y": 0.0, "z": 1.0},
+            "length_samples": 11,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["tunnel"]["blocked_sample_count"] == 2
+    mock_probe.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        start={"x": 0.0, "y": -10.0, "z": 5.0},
+        end={"x": 0.0, "y": 10.0, "z": 5.0},
+        width=4.0,
+        height=3.0,
+        up_direction={"x": 0.0, "y": 0.0, "z": 1.0},
+        length_samples=11,
+        width_samples=3,
+        height_samples=3,
+        max_blocked_samples=25,
     )
 
 
@@ -1581,8 +1655,10 @@ def test_stdio_mode_lists_mcp_tools():
         assert "dimension edits" in tools_by_name["transform_stl_mesh"]["description"]
         assert "Compare two STL files through MCP" in tools_by_name["compare_stl_meshes"]["description"]
         assert "Slice an STL through MCP" in tools_by_name["inspect_stl_sections"]["description"]
+        assert "tilted planes through MCP" in tools_by_name["inspect_stl_plane_sections"]["description"]
         assert "mounting hole/slot candidates" in tools_by_name["detect_mount_features"]["description"]
         assert "Validate STL printability through MCP" in tools_by_name["validate_stl_solid"]["description"]
+        assert "tunnel/cable channel through MCP" in tools_by_name["probe_stl_tunnel"]["description"]
 
     finally:
         # Ensure the subprocess is cleaned up robustly

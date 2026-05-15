@@ -15,8 +15,10 @@ from src.mcp_cadquery_server.core import (
     transform_stl_mesh,
     compare_stl_meshes,
     inspect_stl_sections,
+    inspect_stl_plane_sections,
     detect_mount_features,
     validate_stl_solid,
+    probe_stl_tunnel,
 )
 
 
@@ -197,6 +199,14 @@ def _write_square_frame_stl(path):
         ])
     lines.append("endsolid square_frame")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_tunnel_block_stl(path):
+    """Write a closed block with a rectangular tunnel through its Y axis."""
+    block = cq.Workplane("XY").box(10, 10, 10)
+    cutter = cq.Workplane("XY").box(2, 12, 2)
+    tunneled = block.cut(cutter)
+    exporters.export(tunneled.val(), str(path), exportType="STL")
 
 
 @pytest.fixture(scope="module")
@@ -627,6 +637,63 @@ def test_inspect_stl_sections_reports_closed_outer_and_inner_loops(tmp_path):
     areas = sorted(loop["area"] for loop in section["loops"] if loop["closed"])
     assert areas[0] == pytest.approx(4.0)
     assert areas[1] == pytest.approx(100.0)
+
+
+def test_inspect_stl_plane_sections_reports_tilted_mount_plane_loops(tmp_path):
+    """Test arbitrary-plane loop extraction for tilted mount-face analysis."""
+    stl_path = tmp_path / "square_frame.stl"
+    _write_square_frame_stl(stl_path)
+
+    result = inspect_stl_plane_sections(
+        str(stl_path),
+        origin={"x": 0.0, "y": 0.0, "z": 2.0},
+        normal={"x": 0.0, "y": 0.0, "z": 1.0},
+        x_direction={"x": 1.0, "y": 0.0, "z": 0.0},
+    )
+
+    assert result["plane"]["normal"] == {"x": 0.0, "y": 0.0, "z": 1.0}
+    section = result["sections"][0]
+    assert section["offset"] == pytest.approx(0.0)
+    assert section["closed_loop_count"] == 2
+    assert section["plane_bounds"]["ulen"] == pytest.approx(10.0)
+    assert section["plane_bounds"]["vlen"] == pytest.approx(10.0)
+    areas = sorted(loop["area"] for loop in section["loops"] if loop["closed"])
+    assert areas == pytest.approx([4.0, 100.0])
+
+
+def test_probe_stl_tunnel_detects_clear_and_blocked_corridors(tmp_path):
+    """Test tunnel probing for cable-channel pass-through validation."""
+    stl_path = tmp_path / "tunnel_block.stl"
+    _write_tunnel_block_stl(stl_path)
+
+    clear = probe_stl_tunnel(
+        str(stl_path),
+        start={"x": 0.0, "y": -6.0, "z": 0.0},
+        end={"x": 0.0, "y": 6.0, "z": 0.0},
+        width=1.0,
+        height=1.0,
+        up_direction={"x": 0.0, "y": 0.0, "z": 1.0},
+        length_samples=7,
+        width_samples=3,
+        height_samples=3,
+    )
+    blocked = probe_stl_tunnel(
+        str(stl_path),
+        start={"x": 3.0, "y": -6.0, "z": 0.0},
+        end={"x": 3.0, "y": 6.0, "z": 0.0},
+        width=1.0,
+        height=1.0,
+        up_direction={"x": 0.0, "y": 0.0, "z": 1.0},
+        length_samples=7,
+        width_samples=3,
+        height_samples=3,
+    )
+
+    assert clear["clear"] is True
+    assert clear["blocked_sample_count"] == 0
+    assert blocked["clear"] is False
+    assert blocked["blocked_sample_count"] > 0
+    assert blocked["blocked_samples"]
 
 
 def test_detect_mount_features_clusters_inner_section_loop(tmp_path):
