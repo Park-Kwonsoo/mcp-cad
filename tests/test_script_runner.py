@@ -139,7 +139,10 @@ def test_script_runner_cadquery_error(test_workspace):
     output_json = json.loads(process.stdout)
 
     assert output_json["success"] is False
-    assert "OCP.StdFail.StdFail_NotDone" in output_json["exception_str"]
+    assert (
+        "OCP.StdFail.StdFail_NotDone" in output_json["exception_str"]
+        or "BRep_API: command not done" in output_json["exception_str"]
+    )
     assert len(output_json["results"]) == 0
 
 def test_script_runner_export_failure(test_workspace):

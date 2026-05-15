@@ -1,20 +1,21 @@
 # This module contains all tool handler functions and the tool_handlers dict
 
-# Import necessary modules
 import os
-import sys
-import json
 import uuid
 import subprocess
 import ast
-import re # Added for scan_part_library
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 import cadquery as cq
-from cadquery import cqgi
 
-from src.mcp_cadquery_server.env_setup import prepare_workspace_env, _run_command_helper
+from src.mcp_cadquery_server.env_setup import (
+    prepare_workspace_env,
+    _run_command_helper,
+    workspace_env_signature_cache,
+    workspace_reqs_mtime_cache,
+)
 from src.mcp_cadquery_server.core import (
+    execute_cqgi_script,
     export_shape_to_file,
     export_shape_to_svg_file,
     parse_docstring_metadata,
@@ -23,39 +24,48 @@ from src.mcp_cadquery_server.core import (
 )
 
 from src.mcp_cadquery_server.models import ExecuteCadqueryScriptArgs
+from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
+from . import state
 # Import shared state and config
 from .state import (
     log,
     shape_results,
     part_index,
-    _PROJECT_ROOT, # Use project root for finding script_runner
     DEFAULT_PART_LIBRARY_DIR,
     DEFAULT_OUTPUT_DIR_NAME,
-    DEFAULT_PART_PREVIEW_DIR_NAME,
     DEFAULT_RENDER_DIR_NAME,
-    ACTIVE_PART_LIBRARY_DIR, # Use active config paths
-    ACTIVE_OUTPUT_DIR_PATH,
-    ACTIVE_RENDER_DIR_PATH,
-    ACTIVE_PART_PREVIEW_DIR_PATH
 )
 
-def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: str = "unknown") -> dict:
+def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScriptArgs, str]:
+    """Accept direct model calls and raw MCP request dictionaries."""
+    if isinstance(args, ExecuteCadqueryScriptArgs):
+        return args, request_id
+    if isinstance(args, dict):
+        if "arguments" in args:
+            request_id = args.get("request_id", request_id)
+            return ExecuteCadqueryScriptArgs(**args.get("arguments", {})), request_id
+        return ExecuteCadqueryScriptArgs(**args), request_id
+    raise TypeError(f"Unsupported execute_cadquery_script argument type: {type(args)}")
+
+
+def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> dict:
     """
     Handles the 'execute_cadquery_script' tool request.
     Ensures workspace environment exists and executes the script
-    within that environment using a subprocess runner.
+    within that environment using a persistent CadQuery worker.
     """
     log.info(f"Handling execute_cadquery_script request (ID: {request_id})")
     try:
-        workspace_path = os.path.abspath(args.workspace_path)
-        script_content = args.script
+        execute_args, request_id = _coerce_execute_args(args, request_id)
+        workspace_path = os.path.abspath(execute_args.workspace_path)
+        script_content = execute_args.script
 
         # Determine parameter sets
-        if args.parameter_sets is not None:
-            parameter_sets = args.parameter_sets
-        elif args.parameters is not None:
-            parameter_sets = [args.parameters]
+        if execute_args.parameter_sets is not None:
+            parameter_sets = execute_args.parameter_sets
+        elif execute_args.parameters is not None:
+            parameter_sets = [execute_args.parameters]
         else:
             parameter_sets = [{}]
 
@@ -64,12 +74,11 @@ def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: 
         log.info(f"Processing {len(parameter_sets)} parameter set(s).")
 
         # Ensure the workspace environment is ready
+        previous_env_signature = workspace_env_signature_cache.get(workspace_path)
         workspace_python_exe = prepare_workspace_env(workspace_path)
-
-        # Path to the script runner helper (relative to project root)
-        script_runner_path = os.path.join(_PROJECT_ROOT, "src", "mcp_cadquery_server", "script_runner.py")
-        if not os.path.exists(script_runner_path):
-            raise RuntimeError(f"Script runner not found at {script_runner_path}")
+        current_env_signature = workspace_env_signature_cache.get(workspace_path)
+        if previous_env_signature is not None and current_env_signature != previous_env_signature:
+            cadquery_worker_pool.close_workspace(workspace_path)
 
         results_summary = []
 
@@ -79,38 +88,12 @@ def handle_execute_cadquery_script(args: ExecuteCadqueryScriptArgs, request_id: 
             log.info(f"[{log_prefix}] Preparing execution for parameter set {i} with params: {params}")
 
             try:
-                runner_input_data = json.dumps({
+                runner_result = cadquery_worker_pool.execute(workspace_path, workspace_python_exe, {
                     "workspace_path": workspace_path,
                     "script_content": script_content,
                     "parameters": params,
                     "result_id": result_id
                 })
-
-                cmd = [workspace_python_exe, script_runner_path]
-                log.info(f"[{log_prefix}] Running script runner: {' '.join(cmd)}")
-
-                sub_env = os.environ.copy()
-                sub_env["COVERAGE_RUN_SUBPROCESS"] = "1"
-
-                process = subprocess.run(
-                    cmd,
-                    input=runner_input_data,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    encoding='utf-8',
-                    env=sub_env,
-                    cwd=workspace_path
-                )
-
-                log.debug(f"[{log_prefix}] Runner stdout:\n{process.stdout}")
-                if process.stderr:
-                    log.warning(f"[{log_prefix}] Runner stderr:\n{process.stderr}")
-
-                if process.returncode != 0:
-                    raise RuntimeError(f"Script runner failed with exit code {process.returncode}. Stderr: {process.stderr}")
-
-                runner_result = json.loads(process.stdout)
 
                 shape_results[result_id] = runner_result
 
@@ -278,17 +261,17 @@ def handle_export_shape_to_svg(request: dict) -> dict:
         output_path = os.path.join(render_dir_path, base_filename)
         # Generate a relative URL if static serving is enabled, otherwise just return path
         output_url_or_path = output_path # Default to path
-        if ACTIVE_STATIC_DIR: # Check if static serving is active
+        if state.ACTIVE_STATIC_DIR: # Check if static serving is active
             # Construct URL relative to static dir root
             try:
-                rel_path = os.path.relpath(output_path, ACTIVE_STATIC_DIR)
+                rel_path = os.path.relpath(output_path, state.ACTIVE_STATIC_DIR)
                 if not rel_path.startswith(".."): # Ensure it's within static dir
                     output_url_or_path = "/" + rel_path.replace(os.sep, "/")
                     log.info(f"Generated relative URL for SVG: {output_url_or_path}")
                 else:
-                    log.warning(f"SVG output path '{output_path}' is outside static dir '{ACTIVE_STATIC_DIR}'. Returning absolute path.")
+                    log.warning(f"SVG output path '{output_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
             except ValueError: # Handle case where paths are on different drives (Windows)
-                 log.warning(f"Could not determine relative path for SVG from '{output_path}' to '{ACTIVE_STATIC_DIR}'. Returning absolute path.")
+                 log.warning(f"Could not determine relative path for SVG from '{output_path}' to '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
 
 
         # Default SVG options (can be overridden)
@@ -313,28 +296,34 @@ def handle_scan_part_library(request: dict) -> dict:
     try:
         args = request.get("arguments", {})
         # Use ACTIVE_PART_LIBRARY_DIR if workspace_path not provided
-        workspace_path_arg = args.get("workspace_path", ACTIVE_PART_LIBRARY_DIR)
+        workspace_path_arg = args.get("workspace_path", state.ACTIVE_PART_LIBRARY_DIR)
         if not workspace_path_arg:
             raise ValueError("Missing 'workspace_path' argument and no default library path configured.")
 
         library_path = os.path.abspath(workspace_path_arg)
+        workspace_part_library_path = os.path.join(library_path, DEFAULT_PART_LIBRARY_DIR)
+        if (
+            os.path.isdir(workspace_part_library_path)
+            and not any(name.endswith(".py") and not name.startswith("_") for name in os.listdir(library_path))
+        ):
+            library_path = workspace_part_library_path
         # Use ACTIVE_PART_PREVIEW_DIR_PATH for previews
-        preview_dir_path = ACTIVE_PART_PREVIEW_DIR_PATH
+        preview_dir_path = state.ACTIVE_PART_PREVIEW_DIR_PATH
         if not preview_dir_path:
              raise ValueError("Part preview directory path is not configured.")
 
         # Determine preview URL base if static serving is active
         preview_dir_url_base = None
-        if ACTIVE_STATIC_DIR:
+        if state.ACTIVE_STATIC_DIR:
             try:
-                rel_path = os.path.relpath(preview_dir_path, ACTIVE_STATIC_DIR)
+                rel_path = os.path.relpath(preview_dir_path, state.ACTIVE_STATIC_DIR)
                 if not rel_path.startswith(".."):
                     preview_dir_url_base = "/" + rel_path.replace(os.sep, "/")
                     log.info(f"Using preview URL base: {preview_dir_url_base}")
                 else:
-                    log.warning(f"Preview directory '{preview_dir_path}' is outside static dir '{ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
+                    log.warning(f"Preview directory '{preview_dir_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
             except ValueError:
-                 log.warning(f"Could not determine relative path for preview dir '{preview_dir_path}' to static dir '{ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
+                 log.warning(f"Could not determine relative path for preview dir '{preview_dir_path}' to static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
 
 
         if not os.path.isdir(library_path):
@@ -483,10 +472,7 @@ def handle_save_workspace_module(request: dict) -> dict:
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(module_content)
 
-        # Invalidate the mtime cache for this workspace's requirements
-        # This isn't strictly necessary for saving a module, but good practice
-        # if module changes might imply dependency changes later.
-        # workspace_reqs_mtime_cache.pop(workspace_path, None) # Removed, handled by install
+        cadquery_worker_pool.close_workspace(workspace_path)
 
         return {"success": True, "message": f"Module saved successfully to {target_path}.", "filename": target_path}
     except Exception as e: error_msg = f"Error saving workspace module: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
@@ -519,19 +505,16 @@ def handle_install_workspace_package(request: dict) -> dict:
 
         log.info(f"[{log_prefix}] Running install command: {' '.join(install_cmd)}")
         # Run the command using the helper, capturing output
-        success, output = _run_command_helper(install_cmd, log_prefix=log_prefix, cwd=workspace_path) # Run in workspace CWD
+        process = _run_command_helper(install_cmd, log_prefix=log_prefix, cwd=workspace_path) # Run in workspace CWD
 
-        if success:
-            log.info(f"[{log_prefix}] Successfully installed '{package_name}'.")
-            # Update the mtime cache after successful install
-            reqs_file = os.path.join(workspace_path, "requirements.txt")
-            if os.path.exists(reqs_file):
-                 from .state import workspace_reqs_mtime_cache # Import here to avoid top-level circularity if state imports handlers
-                 workspace_reqs_mtime_cache[workspace_path] = os.path.getmtime(reqs_file)
-            return {"success": True, "message": f"Package '{package_name}' installed successfully.", "output": output}
-        else:
-            log.error(f"[{log_prefix}] Failed to install '{package_name}'. Output:\n{output}")
-            raise RuntimeError(f"Failed to install package '{package_name}'. See logs for details.")
+        log.info(f"[{log_prefix}] Successfully installed '{package_name}'.")
+        reqs_file = os.path.join(workspace_path, "requirements.txt")
+        if os.path.exists(reqs_file):
+            workspace_reqs_mtime_cache[workspace_path] = os.path.getmtime(reqs_file)
+        workspace_env_signature_cache.pop(workspace_path, None)
+        cadquery_worker_pool.close_workspace(workspace_path)
+        output = "\n".join(part for part in [process.stdout, process.stderr] if part)
+        return {"success": True, "message": f"Package '{package_name}' installed successfully.", "output": output}
 
     except Exception as e: error_msg = f"Error installing workspace package: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
 
@@ -625,7 +608,6 @@ def handle_get_shape_properties(request: dict) -> dict:
         args = request.get("arguments", {})
         result_id = args.get("result_id")
         shape_index = args.get("shape_index", 0)
-        # workspace_path_arg = args.get("workspace_path") # Optional context
 
         if not result_id: raise ValueError("Missing 'result_id' argument.")
         if not isinstance(shape_index, int) or shape_index < 0: raise ValueError("'shape_index' must be a non-negative integer.")
@@ -672,7 +654,6 @@ def handle_get_shape_description(request: dict) -> dict:
         args = request.get("arguments", {})
         result_id = args.get("result_id")
         shape_index = args.get("shape_index", 0)
-        # workspace_path_arg = args.get("workspace_path") # Optional context
 
         if not result_id: raise ValueError("Missing 'result_id' argument.")
         if not isinstance(shape_index, int) or shape_index < 0: raise ValueError("'shape_index' must be a non-negative integer.")
