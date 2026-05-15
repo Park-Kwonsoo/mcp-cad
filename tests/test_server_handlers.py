@@ -1438,6 +1438,11 @@ def test_stdio_mode_lists_mcp_tools():
         expected_tool_names = {tool["name"] for tool in expected_server_info["tools"]}
         assert tool_names == expected_tool_names
         assert all("inputSchema" in tool for tool in tools_response["result"]["tools"])
+        tools_by_name = {tool["name"]: tool for tool in tools_response["result"]["tools"]}
+        assert "create_printable_stl" in tools_by_name
+        assert "3D STL" in tools_by_name["create_printable_stl"]["description"]
+        assert "3D-printer-ready STL" in tools_by_name["build_and_export_stl"]["description"]
+        assert "3D printing" in tools_by_name["transform_stl_mesh"]["description"]
 
     finally:
         # Ensure the subprocess is cleaned up robustly
