@@ -17,6 +17,7 @@ from src.mcp_cadquery_server.core import (
     inspect_stl_sections,
     inspect_stl_plane_sections,
     detect_mount_features,
+    render_stl_preview,
     validate_stl_solid,
     solidify_stl_mesh,
     probe_stl_tunnel,
@@ -719,6 +720,44 @@ def test_detect_mount_features_clusters_inner_section_loop(tmp_path):
     assert feature["axis_min"] == pytest.approx(1.0)
     assert feature["axis_max"] == pytest.approx(3.0)
     assert feature["average_equivalent_radius"] == pytest.approx((4.0 / 3.141592653589793) ** 0.5)
+
+
+def test_render_stl_preview_exports_svg_contact_sheet(tmp_path):
+    """Test dependency-free STL visual preview generation."""
+    stl_path = tmp_path / "tetrahedron.stl"
+    output_path = tmp_path / "preview.svg"
+    _write_tetrahedron_stl(stl_path)
+
+    result = render_stl_preview(
+        str(stl_path),
+        str(output_path),
+        views=["top", "front", "iso"],
+        width=900,
+        height=600,
+    )
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+    assert result["success"] is True
+    assert result["output_file"] == str(output_path)
+    assert result["output_format"] == "svg"
+    assert result["view_count"] == 3
+    assert [view["view"] for view in result["views"]] == ["top", "front", "iso"]
+    assert result["analysis"]["mesh"]["triangle_count"] == 4
+
+    content = output_path.read_text(encoding="utf-8")
+    assert "<svg" in content
+    assert "TOP" in content and "FRONT" in content and "ISO" in content
+    assert content.count("<polygon") == 12
+
+
+def test_render_stl_preview_rejects_unknown_view(tmp_path):
+    stl_path = tmp_path / "tetrahedron.stl"
+    output_path = tmp_path / "preview.svg"
+    _write_tetrahedron_stl(stl_path)
+
+    with pytest.raises(ValueError, match="Unsupported STL preview view"):
+        render_stl_preview(str(stl_path), str(output_path), views=["top", "bottom"])
 
 
 def test_validate_stl_solid_flags_unexpected_components(tmp_path):
