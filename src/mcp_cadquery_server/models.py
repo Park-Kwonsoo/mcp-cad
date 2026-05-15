@@ -120,6 +120,15 @@ class ValidateStlSolidArgs(BaseModel):
     expected_component_count: Optional[int] = Field(None, description="Optional exact/maximum expected disconnected component count")
 
 
+class SolidifyStlMeshArgs(BaseModel):
+    file_path: str = Field(..., description="Path to a watertight STL mesh to convert through MCP; do not use CadQuery importers.importShape for STL")
+    output_path: str = Field(..., description="Target BREP or STEP/STP output path for the tessellated solid reference")
+    output_format: Optional[str] = Field(None, description="Optional output format override: brep, step, or stp")
+    max_triangles: int = Field(20000, description="Safety cap for STL triangle count before tessellated BREP conversion")
+    allow_multiple_components: bool = Field(False, description="Allow a compound output when the STL contains disconnected watertight components")
+    require_watertight: bool = Field(True, description="Require watertight/manifold STL topology before creating a solid")
+
+
 class ProbeStlTunnelArgs(BaseModel):
     file_path: str = Field(..., description="Path to an STL file whose cable tunnel or passage should be probed through MCP")
     start: Dict[str, float] = Field(..., description="Tunnel centerline start point as {'x': ..., 'y': ..., 'z': ...}")

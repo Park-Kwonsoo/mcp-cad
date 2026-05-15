@@ -6,6 +6,7 @@ import os
 import json
 import uuid
 import shutil
+from pathlib import Path
 from typing import Optional, Dict, Any # Added Optional
 
 from unittest.mock import patch, MagicMock
@@ -17,6 +18,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 SCRIPT_RUNNER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'src', 'mcp_cadquery_server', 'script_runner.py'))
 # Use the same python interpreter that's running pytest
 PYTHON_EXE = sys.executable
+
+
+def _test_results_dir(workspace_path: str) -> str:
+    return os.path.join(os.path.dirname(workspace_path), "script_runner_results", os.path.basename(workspace_path))
+
 
 @pytest.fixture(scope="function")
 def test_workspace(tmp_path_factory):
@@ -32,6 +38,7 @@ def test_workspace(tmp_path_factory):
 def run_script_runner(input_data: dict, workspace_path: str, env_vars: Optional[dict] = None) -> subprocess.CompletedProcess:
     """Helper function to run the script_runner.py subprocess."""
     cmd = [PYTHON_EXE, SCRIPT_RUNNER_PATH]
+    input_data.setdefault("results_dir", _test_results_dir(workspace_path))
     input_json = json.dumps(input_data)
 
     # Prepare environment
@@ -72,7 +79,8 @@ def test_script_runner_success_simple_box(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
     process = run_script_runner(input_data, str(test_workspace))
@@ -95,8 +103,9 @@ def test_script_runner_success_simple_box(test_workspace):
         assert shape_result["export_error"] is None
 
     # Check if the intermediate file was created
-    expected_brep = test_workspace / ".cq_results" / result_id / "test_box.brep"
+    expected_brep = Path(input_data["results_dir"]) / result_id / "test_box.brep"
     assert expected_brep.is_file(), f"Expected BREP file not found at {expected_brep}"
+    assert not (test_workspace / ".cq_results").exists()
 
 
 def test_script_runner_redirects_script_stdout_to_stderr(test_workspace):
@@ -114,7 +123,8 @@ def test_script_runner_redirects_script_stdout_to_stderr(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
     process = run_script_runner(input_data, str(test_workspace))
@@ -136,7 +146,8 @@ def test_script_runner_syntax_error(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
     process = run_script_runner(input_data, str(test_workspace))
@@ -158,7 +169,8 @@ def test_script_runner_cadquery_error(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
     process = run_script_runner(input_data, str(test_workspace))
@@ -185,11 +197,13 @@ def test_script_runner_export_failure(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
-    # Create a file where the .cq_results directory should be to cause mkdir to fail
-    cq_results_path = os.path.join(test_workspace, ".cq_results")
+    # Create a file where the results directory should be to cause mkdir to fail
+    cq_results_path = input_data["results_dir"]
+    os.makedirs(os.path.dirname(cq_results_path), exist_ok=True)
     with open(cq_results_path, "w") as f:
         f.write("block directory creation")
 
@@ -211,7 +225,8 @@ def test_script_runner_general_exception(test_workspace):
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
     # Mock json.loads to fail when reading input
@@ -329,11 +344,13 @@ show_object(result, name='test_box')
         "workspace_path": str(test_workspace),
         "script_content": script_content,
         "parameters": {},
-        "result_id": result_id
+        "result_id": result_id,
+        "results_dir": _test_results_dir(str(test_workspace)),
     }
 
-    # Create a file where the .cq_results directory should be to cause mkdir to fail
-    cq_results_path = os.path.join(test_workspace, ".cq_results")
+    # Create a file where the results directory should be to cause mkdir to fail
+    cq_results_path = input_data["results_dir"]
+    os.makedirs(os.path.dirname(cq_results_path), exist_ok=True)
     with open(cq_results_path, "w") as f:
         f.write("block directory creation")
 
@@ -406,5 +423,5 @@ show_object(assy, name="test_assembly")
         assert shape_result["export_error"] is None
 
     # Check if the intermediate file was created
-    expected_brep = test_workspace / ".cq_results" / result_id / "test_assembly.brep"
+    expected_brep = Path(input_data["results_dir"]) / result_id / "test_assembly.brep"
     assert expected_brep.is_file(), f"Expected BREP file not found at {expected_brep}"

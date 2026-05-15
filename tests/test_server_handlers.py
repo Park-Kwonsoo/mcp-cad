@@ -175,6 +175,9 @@ def test_mcp_execute_endpoint_script_success(mock_ensure_env, mock_worker_execut
     mock_ensure_env.assert_called_once_with(workspace_path)
 
     mock_worker_execute.assert_called_once()
+    worker_payload = mock_worker_execute.call_args.args[2]
+    assert "results_dir" in worker_payload
+    assert not worker_payload["results_dir"].startswith(workspace_path + os.sep)
 
     # Check that the result was stored correctly in state.shape_results (based on mocked output)
     assert result_id_expected in state.shape_results
@@ -727,6 +730,39 @@ def test_process_tool_request_validate_stl_solid(mock_validate):
         file_path="/tmp/source.stl",
         allow_multiple_components=False,
         expected_component_count=1,
+    )
+
+
+@patch('src.mcp_cadquery_server.handlers.core_solidify_stl_mesh')
+def test_process_tool_request_solidify_stl_mesh(mock_solidify):
+    """Test direct solidify_stl_mesh tool processing."""
+    mock_solidify.return_value = {
+        "output_file": "/tmp/source.brep",
+        "conversion": {"type": "tessellated_brep_from_stl_mesh"},
+        "warnings": ["not a clean parametric reconstruction"],
+    }
+
+    response = process_tool_request({
+        "request_id": "test-solidify-stl",
+        "tool_name": "solidify_stl_mesh",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "output_path": "/tmp/source.brep",
+            "output_format": "brep",
+            "allow_multiple_components": True,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["result"]["output_file"] == "/tmp/source.brep"
+    mock_solidify.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        output_path="/tmp/source.brep",
+        output_format="brep",
+        max_triangles=20000,
+        allow_multiple_components=True,
+        require_watertight=True,
     )
 
 
@@ -1658,6 +1694,7 @@ def test_stdio_mode_lists_mcp_tools():
         assert "tilted planes through MCP" in tools_by_name["inspect_stl_plane_sections"]["description"]
         assert "mounting hole/slot candidates" in tools_by_name["detect_mount_features"]["description"]
         assert "Validate STL printability through MCP" in tools_by_name["validate_stl_solid"]["description"]
+        assert "instead of CadQuery importers.importShape" in tools_by_name["solidify_stl_mesh"]["description"]
         assert "tunnel/cable channel through MCP" in tools_by_name["probe_stl_tunnel"]["description"]
 
     finally:

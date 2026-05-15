@@ -1,9 +1,11 @@
 """Shared CadQuery execution helpers for one-shot and persistent runners."""
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 from typing import Any, Dict
@@ -21,6 +23,30 @@ def _format_exception(exc: BaseException) -> str:
     return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
 
+def _default_cache_root() -> str:
+    configured = os.environ.get("MCP_CADQUERY_CACHE_DIR")
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Caches/mcp-cadquery")
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+        return os.path.join(local_app_data, "mcp-cadquery", "Cache")
+    return os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "mcp-cadquery")
+
+
+def _workspace_cache_key(workspace_path: str) -> str:
+    resolved = os.path.realpath(os.path.abspath(workspace_path))
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+    base_name = os.path.basename(resolved) or "workspace"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", base_name).strip("._") or "workspace"
+    return f"{safe_name}-{digest}"
+
+
+def _default_results_dir(workspace_path: str) -> str:
+    return os.path.join(_default_cache_root(), "workspaces", _workspace_cache_key(workspace_path), ".cq_results")
+
+
 def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute one CadQuery job and return the serialized runner result.
@@ -35,6 +61,7 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
         script_content = input_data.get("script_content")
         parameters = input_data.get("parameters", {})
         result_id = input_data.get("result_id")
+        results_dir = input_data.get("results_dir")
 
         if not result_id:
             raise ValueError("Missing 'result_id' in input.")
@@ -44,6 +71,8 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("Missing 'script_content' in input.")
         if not isinstance(parameters, dict):
             raise ValueError("'parameters' must be a dictionary.")
+        if results_dir is not None and not isinstance(results_dir, str):
+            raise ValueError("'results_dir' must be a string when provided.")
 
         modules_dir = os.path.join(workspace_path, "modules")
         if os.path.isdir(modules_dir):
@@ -65,7 +94,8 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
             output_result["exception_str"] = _format_exception(build_result.exception)
 
         if build_result.results:
-            result_files_dir = os.path.join(workspace_path, ".cq_results", result_id)
+            result_root = results_dir or _default_results_dir(workspace_path)
+            result_files_dir = os.path.join(result_root, result_id)
             os.makedirs(result_files_dir, exist_ok=True)
 
             shapes_to_export = []

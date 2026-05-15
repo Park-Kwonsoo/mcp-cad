@@ -10,6 +10,7 @@ import cadquery as cq
 
 from src.mcp_cadquery_server.env_setup import (
     prepare_workspace_env,
+    get_workspace_results_dir,
     _run_command_helper,
     workspace_env_signature_cache,
     workspace_reqs_mtime_cache,
@@ -28,6 +29,7 @@ from src.mcp_cadquery_server.core import (
     inspect_stl_plane_sections as core_inspect_stl_plane_sections,
     detect_mount_features as core_detect_mount_features,
     validate_stl_solid as core_validate_stl_solid,
+    solidify_stl_mesh as core_solidify_stl_mesh,
     probe_stl_tunnel as core_probe_stl_tunnel,
 )
 
@@ -41,6 +43,7 @@ from src.mcp_cadquery_server.models import (
     InspectStlPlaneSectionsArgs,
     DetectMountFeaturesArgs,
     ValidateStlSolidArgs,
+    SolidifyStlMeshArgs,
     ProbeStlTunnelArgs,
 )
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
@@ -131,6 +134,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
         log.info(f"Target workspace: {workspace_path}")
         log.info(f"Script content received (first 100 chars): {script_content[:100]}...")
         log.info(f"Processing {len(parameter_sets)} parameter set(s).")
+        results_dir = get_workspace_results_dir(workspace_path)
 
         # Ensure the workspace environment is ready
         previous_env_signature = workspace_env_signature_cache.get(workspace_path)
@@ -149,6 +153,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
             try:
                 runner_result = cadquery_worker_pool.execute(workspace_path, workspace_python_exe, {
                     "workspace_path": workspace_path,
+                    "results_dir": results_dir,
                     "script_content": script_content,
                     "parameters": params,
                     "result_id": result_id
@@ -438,6 +443,33 @@ def handle_validate_stl_solid(request: dict) -> dict:
         }
     except Exception as e:
         error_msg = f"Error during STL solid validation: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_solidify_stl_mesh(request: dict) -> dict:
+    """
+    Convert a watertight STL mesh to tessellated BREP/STEP through MCP instead of CadQuery importers.importShape.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling solidify_stl_mesh request (ID: {request_id})")
+    try:
+        args = SolidifyStlMeshArgs(**request.get("arguments", {}))
+        result = core_solidify_stl_mesh(
+            file_path=args.file_path,
+            output_path=args.output_path,
+            output_format=args.output_format,
+            max_triangles=args.max_triangles,
+            allow_multiple_components=args.allow_multiple_components,
+            require_watertight=args.require_watertight,
+        )
+        return {
+            "success": True,
+            "message": f"STL mesh converted to tessellated solid reference: {result['output_file']}",
+            "result": result,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL mesh solidification: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
@@ -1052,6 +1084,7 @@ tool_handlers = {
     "inspect_stl_plane_sections": handle_inspect_stl_plane_sections,
     "detect_mount_features": handle_detect_mount_features,
     "validate_stl_solid": handle_validate_stl_solid,
+    "solidify_stl_mesh": handle_solidify_stl_mesh,
     "probe_stl_tunnel": handle_probe_stl_tunnel,
     "scan_part_library": handle_scan_part_library,
     "search_parts": handle_search_parts,

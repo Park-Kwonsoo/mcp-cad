@@ -441,6 +441,23 @@ def _triangle_component_summaries(triangles: List[Triangle], components: List[Li
     return summaries
 
 
+def _stl_triangle_components(triangles: List[Triangle]) -> List[List[int]]:
+    edge_to_triangles: Dict[Tuple[Vertex, Vertex], List[int]] = defaultdict(list)
+    triangle_edges: List[List[Tuple[Vertex, Vertex]]] = []
+    for triangle_index, triangle in enumerate(triangles):
+        rounded = [_rounded_vertex(vertex) for vertex in triangle]
+        edges = [
+            tuple(sorted((rounded[0], rounded[1]))),
+            tuple(sorted((rounded[1], rounded[2]))),
+            tuple(sorted((rounded[2], rounded[0]))),
+        ]
+        triangle_edges.append(edges)
+        for edge in edges:
+            edge_to_triangles[edge].append(triangle_index)
+
+    return _triangle_component_indices(len(triangles), triangle_edges, edge_to_triangles)
+
+
 def _rounded_vertex(vertex: Vertex) -> Vertex:
     return (round(vertex[0], 8), round(vertex[1], 8), round(vertex[2], 8))
 
@@ -1352,6 +1369,127 @@ def validate_stl_solid(
         "checks": checks,
         "risks": risks,
         "analysis": analysis,
+    }
+
+
+def _triangle_to_cq_face(triangle: Triangle) -> cq.Face:
+    if _triangle_area(triangle) <= 1e-12:
+        raise ValueError(f"Cannot create a face from a degenerate STL triangle: {triangle}")
+    points = [cq.Vector(*vertex) for vertex in triangle]
+    points.append(points[0])
+    wire = cq.Wire.makePolygon(points)
+    return cq.Face.makeFromWires(wire)
+
+
+def _stl_component_to_solid(triangles: List[Triangle], component_indices: List[int]) -> cq.Solid:
+    faces = [_triangle_to_cq_face(triangles[index]) for index in component_indices]
+    shell = cq.Shell.makeShell(faces)
+    if shell.ShapeType() != "Shell":
+        raise ValueError("STL component did not produce a single shell; check for disconnected or invalid mesh topology.")
+    solid = cq.Solid.makeSolid(shell)
+    if not solid.isValid():
+        raise ValueError("STL component produced an invalid CadQuery solid.")
+    return solid
+
+
+def solidify_stl_mesh(
+    file_path: str,
+    output_path: str,
+    output_format: Optional[str] = None,
+    max_triangles: int = 20000,
+    allow_multiple_components: bool = False,
+    require_watertight: bool = True,
+) -> Dict[str, Any]:
+    """
+    Converts a watertight STL triangle mesh into a tessellated BREP/STEP shape.
+
+    This is intentionally a mesh-to-BRep bridge for reference or boolean work.
+    It does not reconstruct clean parametric CadQuery features.
+    """
+    if max_triangles <= 0:
+        raise ValueError("max_triangles must be greater than zero.")
+    if not output_path:
+        raise ValueError("output_path is required.")
+
+    resolved_path = _resolve_existing_file(file_path)
+    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    if len(triangles) > max_triangles:
+        raise ValueError(
+            f"STL has {len(triangles)} triangles, which exceeds max_triangles={max_triangles}. "
+            "Increase the limit only for small, intentional conversions."
+        )
+
+    analysis = _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+    topology = analysis["topology"]
+    if require_watertight and not topology["watertight"]:
+        raise ValueError(
+            "STL mesh is not watertight/manifold, so it cannot be safely converted to a solid. "
+            "Use analyze_cad_file, inspect_stl_sections, or probe_stl_tunnel first to locate the mesh issue."
+        )
+
+    component_count = topology["connected_component_count"]
+    if component_count > 1 and not allow_multiple_components:
+        raise ValueError(
+            f"STL has {component_count} disconnected components. Pass allow_multiple_components=true "
+            "to export a compound, or rebuild a single boolean-unioned CadQuery model instead."
+        )
+
+    components = _stl_triangle_components(triangles)
+    solids = [_stl_component_to_solid(triangles, component) for component in components]
+    shape_to_export: Any = solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
+
+    normalized_output_format = output_format or os.path.splitext(output_path)[1].lstrip(".") or "brep"
+    normalized_output_format = normalized_output_format.strip().lower()
+    export_type_by_format = {
+        "brep": "BREP",
+        "brp": "BREP",
+        "step": "STEP",
+        "stp": "STEP",
+    }
+    if normalized_output_format not in export_type_by_format:
+        raise ValueError("solidify_stl_mesh output_format must be BREP or STEP/STP.")
+
+    target_path = os.path.abspath(output_path)
+    export_shape_to_file(
+        shape_to_export,
+        target_path,
+        export_type_by_format[normalized_output_format],
+        {},
+    )
+
+    properties = None
+    try:
+        properties = get_shape_properties(shape_to_export)
+    except Exception as exc:
+        log.warning(f"Could not calculate properties for solidified STL shape: {exc}")
+
+    warnings = [
+        "CadQuery importers.importShape/importStep do not import STL directly; this MCP tool parsed STL triangles instead.",
+        "Output is a tessellated BREP/STEP made from triangle faces, not a clean parametric reconstruction.",
+    ]
+    if len(solids) > 1:
+        warnings.append("Output is a compound with multiple disconnected solids.")
+
+    return {
+        "success": True,
+        "source_file": {
+            "path": resolved_path,
+            "format": "stl",
+            "stl_encoding": stl_encoding,
+        },
+        "output_file": target_path,
+        "output_format": export_type_by_format[normalized_output_format].lower(),
+        "conversion": {
+            "type": "tessellated_brep_from_stl_mesh",
+            "triangle_count": len(triangles),
+            "component_count": len(solids),
+            "shape_type": shape_to_export.ShapeType(),
+            "allow_multiple_components": allow_multiple_components,
+            "require_watertight": require_watertight,
+        },
+        "analysis": analysis,
+        "properties": properties,
+        "warnings": warnings,
     }
 
 
