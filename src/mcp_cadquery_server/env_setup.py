@@ -3,10 +3,13 @@ import sys
 import subprocess
 import shutil
 import logging
+import hashlib
+import re
 from typing import Optional
 
 # Constants for environment setup
 VENV_DIR = ".venv"
+CACHE_ENV_VAR = "MCP_CADQUERY_CACHE_DIR"
 PYTHON_VERSION = "3.11"
 BASE_WORKSPACE_PACKAGES = ["cadquery==2.5.2"]
 BASE_CADQUERY_VERSION = "2.5.2"
@@ -14,6 +17,38 @@ BASE_CADQUERY_VERSION = "2.5.2"
 # Cache for workspace requirements.txt modification times
 workspace_reqs_mtime_cache: dict[str, float] = {}
 workspace_env_signature_cache: dict[str, tuple[str, Optional[float]]] = {}
+
+
+def _default_cache_root() -> str:
+    configured = os.environ.get(CACHE_ENV_VAR)
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Caches/mcp-cadquery")
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+        return os.path.join(local_app_data, "mcp-cadquery", "Cache")
+    return os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "mcp-cadquery")
+
+
+def _workspace_cache_key(workspace_path: str) -> str:
+    resolved = os.path.realpath(os.path.abspath(workspace_path))
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+    base_name = os.path.basename(resolved) or "workspace"
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", base_name).strip("._") or "workspace"
+    return f"{safe_name}-{digest}"
+
+
+def get_workspace_cache_dir(workspace_path: str) -> str:
+    return os.path.join(_default_cache_root(), "workspaces", _workspace_cache_key(workspace_path))
+
+
+def get_workspace_venv_dir(workspace_path: str) -> str:
+    return os.path.join(get_workspace_cache_dir(workspace_path), VENV_DIR)
+
+
+def get_workspace_results_dir(workspace_path: str) -> str:
+    return os.path.join(get_workspace_cache_dir(workspace_path), ".cq_results")
 
 
 def _get_requirements_mtime(requirements_file: str) -> Optional[float]:
@@ -112,8 +147,9 @@ def prepare_workspace_env(workspace_path: str) -> str:
         logging.error(f"[{log_prefix}] {msg}")
         raise FileNotFoundError(msg)
 
-    # 1. Define paths and check the in-process fast path.
-    venv_dir = os.path.join(workspace_path, VENV_DIR)
+    # 1. Define paths and check the in-process fast path. Runtime artifacts
+    # are kept out of user workspaces so STL output directories stay clean.
+    venv_dir = get_workspace_venv_dir(workspace_path)
     requirements_file = os.path.join(workspace_path, "requirements.txt")
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     python_exe = os.path.join(venv_dir, bin_subdir, "python.exe" if sys.platform == "win32" else "python")
@@ -144,6 +180,7 @@ def prepare_workspace_env(workspace_path: str) -> str:
         created_venv = False
         if not os.path.isdir(venv_dir) or not os.path.exists(python_exe):
             ensure_uv_once()
+            os.makedirs(os.path.dirname(venv_dir), exist_ok=True)
             logging.info(f"[{log_prefix}] Creating virtual environment in {venv_dir} using Python {PYTHON_VERSION}...")
             _run_command_helper(["uv", "venv", venv_dir, "-p", PYTHON_VERSION], log_prefix=log_prefix)
             logging.info(f"[{log_prefix}] Virtual environment created.")

@@ -16,6 +16,7 @@ from pathlib import Path # Import Path
 # Import directly from the correct module
 from src.mcp_cadquery_server.env_setup import (
     prepare_workspace_env,
+    get_workspace_venv_dir,
     _run_command_helper,
     workspace_reqs_mtime_cache,
     workspace_env_signature_cache,
@@ -24,6 +25,15 @@ from src.mcp_cadquery_server.env_setup import (
     PYTHON_VERSION as ENV_SETUP_PYTHON_VERSION # Import with alias if needed locally
 )
 from src.mcp_cadquery_server import state # Import state for defaults if needed
+
+
+@pytest.fixture(autouse=True)
+def isolated_cadquery_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("MCP_CADQUERY_CACHE_DIR", str(tmp_path / "mcp-cadquery-cache"))
+
+
+def _expected_venv_dir(workspace_path):
+    return Path(get_workspace_venv_dir(str(workspace_path)))
 
 
 def _is_base_install_cmd(cmd):
@@ -109,7 +119,7 @@ def test_prepare_workspace_env_creation(mock_which, mock_run_helper, tmp_path):
     # Don't create workspace_path here, the function should do it implicitly via uv
 
     # Define expected paths
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
 
@@ -148,6 +158,7 @@ def test_prepare_workspace_env_creation(mock_which, mock_run_helper, tmp_path):
     assert returned_python_exe == str(expected_python_exe)
     assert os.path.isdir(venv_dir) # Check venv dir exists (implicitly created by mock side effect)
     assert os.path.isfile(expected_python_exe) # Check python exe exists (created by mock side effect)
+    assert not (workspace_path / ".venv").exists()
 
     # Check that uv was checked
     mock_which.assert_called_once_with("uv")
@@ -179,7 +190,7 @@ def test_prepare_workspace_env_existing_venv(mock_which, mock_run_helper, tmp_pa
     workspace_path.mkdir() # Create the workspace dir
 
     # Define expected paths and create dummy venv structure
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
     expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -237,7 +248,7 @@ def test_prepare_workspace_env_existing_venv_skips_base_install_when_available(m
     workspace_path = tmp_path / "existing_ready_workspace"
     workspace_path.mkdir()
 
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
     expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -276,7 +287,7 @@ def test_prepare_workspace_env_with_requirements(mock_which, mock_run_helper, tm
     reqs_mtime = requirements_file.stat().st_mtime
 
     # Define expected paths
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
 
@@ -343,7 +354,7 @@ def test_prepare_workspace_env_requirements_unchanged(mock_which, mock_run_helpe
     reqs_mtime = requirements_file.stat().st_mtime
 
     # Define expected paths and create dummy venv structure
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
     expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -406,7 +417,7 @@ def test_prepare_workspace_env_requirements_changed(mock_which, mock_run_helper,
     initial_mtime = requirements_file.stat().st_mtime
 
     # Define expected paths and create dummy venv structure
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
     expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -478,7 +489,7 @@ def test_prepare_workspace_env_install_failure(mock_which, mock_run_helper, tmp_
     reqs_mtime = requirements_file.stat().st_mtime
 
     # Define expected paths
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
 
@@ -540,7 +551,7 @@ def test_prepare_workspace_env_fast_path_uses_signature_cache(mock_which, mock_r
     requirements_file.write_text("numpy")
     reqs_mtime = requirements_file.stat().st_mtime
 
-    venv_dir = workspace_path / ".venv"
+    venv_dir = _expected_venv_dir(workspace_path)
     bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
     expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
     expected_python_exe.parent.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,7 @@ from src.mcp_cadquery_server.core import (
     inspect_stl_plane_sections,
     detect_mount_features,
     validate_stl_solid,
+    solidify_stl_mesh,
     probe_stl_tunnel,
 )
 
@@ -734,6 +735,49 @@ def test_validate_stl_solid_flags_unexpected_components(tmp_path):
     assert any("disconnected components" in risk for risk in failed["risks"])
     assert allowed["success"] is True
     assert allowed["checks"]["component_count_allowed"] is True
+
+
+def test_solidify_stl_mesh_exports_tessellated_brep(tmp_path):
+    """Test STL-to-BREP conversion without CadQuery STL importers."""
+    stl_path = tmp_path / "tetrahedron.stl"
+    output_path = tmp_path / "tetrahedron.brep"
+    _write_tetrahedron_stl(stl_path)
+
+    result = solidify_stl_mesh(str(stl_path), str(output_path))
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0
+    assert result["output_file"] == str(output_path)
+    assert result["conversion"]["type"] == "tessellated_brep_from_stl_mesh"
+    assert result["conversion"]["triangle_count"] == 4
+    assert result["conversion"]["component_count"] == 1
+    assert result["properties"]["volume"] == pytest.approx(1.0 / 6.0)
+    assert any("not a clean parametric reconstruction" in warning for warning in result["warnings"])
+
+    brep_analysis = analyze_cad_file(str(output_path), "brep")
+    assert brep_analysis["analysis_type"] == "cadquery_shape"
+    assert brep_analysis["properties"]["volume"] == pytest.approx(1.0 / 6.0)
+
+
+def test_solidify_stl_mesh_requires_component_opt_in(tmp_path):
+    """Test disconnected STL shells require explicit compound opt-in."""
+    stl_path = tmp_path / "two_tetrahedrons.stl"
+    output_path = tmp_path / "two_tetrahedrons.brep"
+    _write_two_disconnected_tetrahedrons_stl(stl_path)
+
+    with pytest.raises(ValueError, match="disconnected components"):
+        solidify_stl_mesh(str(stl_path), str(output_path))
+
+    result = solidify_stl_mesh(
+        str(stl_path),
+        str(output_path),
+        allow_multiple_components=True,
+    )
+
+    assert output_path.exists()
+    assert result["conversion"]["component_count"] == 2
+    assert result["conversion"]["shape_type"] == "Compound"
+    assert any("compound" in warning.lower() for warning in result["warnings"])
 
 
 def test_analyze_cad_file_unsupported_format(tmp_path):

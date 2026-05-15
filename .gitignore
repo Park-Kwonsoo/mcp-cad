@@ -15,6 +15,7 @@ build/
 coverage.xml
 htmlcov/
 junit*.xml
+.cq_results/
 
 # Virtual environment
 .venv-*/

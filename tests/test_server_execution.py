@@ -7,6 +7,7 @@ import sys
 import time
 import uuid
 import subprocess
+from pathlib import Path
 from unittest.mock import patch, call
 from fastapi.testclient import TestClient
 
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import necessary components from their new locations
 from src.mcp_cadquery_server import state
 from src.mcp_cadquery_server.web_server import app # Import app from web_server
-from src.mcp_cadquery_server.env_setup import prepare_workspace_env # Import from env_setup
+from src.mcp_cadquery_server.env_setup import prepare_workspace_env, get_workspace_results_dir # Import from env_setup
 # shape_results is accessed via state.shape_results
 
 # Import the old function for comparison if needed (or remove old tests)
@@ -38,8 +39,9 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def clear_shape_results_before_each():
+def clear_shape_results_before_each(tmp_path, monkeypatch):
     """Clears the global shape_results dict before each test in this module."""
+    monkeypatch.setenv("MCP_CADQUERY_CACHE_DIR", str(tmp_path / "mcp-cadquery-cache"))
     # Access shape_results via the imported state module
     if hasattr(state, 'shape_results') and isinstance(state.shape_results, dict):
         print("\nClearing state.shape_results...")
@@ -175,8 +177,7 @@ def test_integration_execute_simple_script_in_workspace(mock_prepare_env, client
     assert exec_result.get("exception_str") is None, f"Execution reported an exception: {exec_result.get('exception_str')}"
 
     # Check for intermediate file creation using the correct result ID (found_key)
-    # Path structure: <workspace>/.cq_results/<found_key>/<shape_name>.<ext>
-    intermediate_dir = workspace_path / ".cq_results" / found_key
+    intermediate_dir = Path(get_workspace_results_dir(str(workspace_path))) / found_key
     expected_brep_file = intermediate_dir / "test_box.brep" # Use name from show_object
 
     assert intermediate_dir.is_dir(), f"Intermediate directory not created: {intermediate_dir}"
@@ -237,7 +238,7 @@ def test_integration_execute_with_params_in_workspace(mock_prepare_env, client, 
     # assert single_result.get("params") == params
 
     # Check for intermediate file
-    intermediate_dir = workspace_path / ".cq_results" / found_key
+    intermediate_dir = Path(get_workspace_results_dir(str(workspace_path))) / found_key
     expected_brep_file = intermediate_dir / "test_cylinder.brep" # Use name from show_object
     assert intermediate_dir.is_dir()
     assert expected_brep_file.is_file()
@@ -316,7 +317,7 @@ def test_integration_execute_with_workspace_module(mock_prepare_env, client, tmp
     assert "intermediate_path" in single_result and single_result["intermediate_path"] is not None
 
     # Check for intermediate file
-    intermediate_dir = workspace_path / ".cq_results" / found_key
+    intermediate_dir = Path(get_workspace_results_dir(str(workspace_path))) / found_key
     expected_brep_file = intermediate_dir / "module_sphere.brep" # Use the correct name
     assert intermediate_dir.is_dir()
     assert expected_brep_file.is_file()
@@ -405,7 +406,7 @@ def test_integration_execute_with_installed_package(mock_prepare_env, mock_run_h
     assert "intermediate_path" in single_result and single_result["intermediate_path"] is not None
 
     # Check for intermediate file
-    intermediate_dir = workspace_path / ".cq_results" / found_key
+    intermediate_dir = Path(get_workspace_results_dir(str(workspace_path))) / found_key
     expected_brep_file = intermediate_dir / "dummy.brep" # Name from show_object
     assert intermediate_dir.is_dir()
     assert expected_brep_file.is_file()
@@ -455,7 +456,7 @@ def test_integration_execute_script_failure_in_workspace(mock_prepare_env, clien
     assert "exception_str" in exec_result and exec_result["exception_str"], "Exception string should be present on failure"
 
     # Check that intermediate directory/file was NOT created
-    intermediate_dir = workspace_path / ".cq_results" / found_key
+    intermediate_dir = Path(get_workspace_results_dir(str(workspace_path))) / found_key
     # The directory might be created before failure, but the file shouldn't
     # assert not intermediate_dir.exists(), f"Intermediate directory should not exist for failed execution: {intermediate_dir}"
     expected_brep_file = intermediate_dir / "shape_0.brep"
