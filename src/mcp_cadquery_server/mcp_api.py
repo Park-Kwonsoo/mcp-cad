@@ -5,14 +5,25 @@ from .state import log # Import log from state
 from .handlers import tool_handlers # Import tool_handlers from handlers
 # Removed import from server to break circular dependency
 
+
+def _schema_for(model_class: Any) -> Dict[str, Any]:
+    schema_method = getattr(model_class, "model_json_schema", None)
+    if schema_method:
+        return schema_method()
+    return model_class.schema()
+
+
 def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
     """
     Generates input schemas for each tool based on Pydantic models.
     """
     from src.mcp_cadquery_server.models import (
         ExecuteCadqueryScriptArgs,
+        BuildAndExportStlArgs,
         ExportShapeArgs,
         ExportShapeToSvgArgs,
+        AnalyzeCadFileArgs,
+        TransformStlMeshArgs,
         ScanPartLibraryArgs,
         SaveWorkspaceModuleArgs,
         InstallWorkspacePackageArgs,
@@ -22,15 +33,18 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
     )
 
     schemas = {
-        "execute_cadquery_script": ExecuteCadqueryScriptArgs.schema(),
-        "export_shape": ExportShapeArgs.schema(),
-        "export_shape_to_svg": ExportShapeToSvgArgs.schema(),
-        "scan_part_library": ScanPartLibraryArgs.schema(),
-        "save_workspace_module": SaveWorkspaceModuleArgs.schema(),
-        "install_workspace_package": InstallWorkspacePackageArgs.schema(),
-        "search_parts": SearchPartsArgs.schema(),
-        "get_shape_properties": GetShapePropertiesArgs.schema(),
-        "get_shape_description": GetShapeDescriptionArgs.schema(),
+        "execute_cadquery_script": _schema_for(ExecuteCadqueryScriptArgs),
+        "build_and_export_stl": _schema_for(BuildAndExportStlArgs),
+        "export_shape": _schema_for(ExportShapeArgs),
+        "export_shape_to_svg": _schema_for(ExportShapeToSvgArgs),
+        "analyze_cad_file": _schema_for(AnalyzeCadFileArgs),
+        "transform_stl_mesh": _schema_for(TransformStlMeshArgs),
+        "scan_part_library": _schema_for(ScanPartLibraryArgs),
+        "save_workspace_module": _schema_for(SaveWorkspaceModuleArgs),
+        "install_workspace_package": _schema_for(InstallWorkspacePackageArgs),
+        "search_parts": _schema_for(SearchPartsArgs),
+        "get_shape_properties": _schema_for(GetShapePropertiesArgs),
+        "get_shape_description": _schema_for(GetShapeDescriptionArgs),
         "launch_cq_editor": {"type": "object", "properties": {}, "required": []},
     }
 

@@ -1,8 +1,10 @@
 import os
 import re
-import ast
+import math
+import struct
 import logging
-from typing import Dict, Any, List, Optional
+from collections import Counter
+from typing import Dict, Any, List, Optional, Tuple
 
 # Import CadQuery-related libraries directly needed by core functions
 import cadquery as cq
@@ -284,3 +286,399 @@ def get_shape_description(shape_to_describe: Any) -> str:
         error_msg = f"Core description generation failed: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg) from e
+
+
+Vertex = Tuple[float, float, float]
+Triangle = Tuple[Vertex, Vertex, Vertex]
+
+
+def _resolve_existing_file(file_path: str) -> str:
+    if not file_path:
+        raise ValueError("Missing file path.")
+    resolved_path = os.path.abspath(os.path.expanduser(file_path))
+    if not os.path.isfile(resolved_path):
+        raise ValueError(f"File not found: {resolved_path}")
+    return resolved_path
+
+
+def _normalize_file_format(file_path: str, file_format: Optional[str]) -> str:
+    raw_format = file_format or os.path.splitext(file_path)[1].lstrip(".")
+    normalized = raw_format.strip().lower()
+    aliases = {
+        "stp": "step",
+        "stl": "stl",
+        "step": "step",
+        "brep": "brep",
+        "brp": "brep",
+        "bin": "bin",
+        "dxf": "dxf",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported CAD file format: {raw_format or 'unknown'}")
+    return aliases[normalized]
+
+
+def _read_binary_stl(data: bytes, triangle_count: int) -> List[Triangle]:
+    triangles: List[Triangle] = []
+    offset = 84
+    for _ in range(triangle_count):
+        offset += 12  # normal vector
+        coords = struct.unpack("<9f", data[offset:offset + 36])
+        offset += 38  # vertices plus attribute byte count
+        triangles.append((
+            (float(coords[0]), float(coords[1]), float(coords[2])),
+            (float(coords[3]), float(coords[4]), float(coords[5])),
+            (float(coords[6]), float(coords[7]), float(coords[8])),
+        ))
+    return triangles
+
+
+def _read_ascii_stl(text: str) -> List[Triangle]:
+    vertices: List[Vertex] = []
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 4 and parts[0].lower() == "vertex":
+            try:
+                vertices.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            except ValueError as exc:
+                raise ValueError(f"Invalid STL vertex line: {line}") from exc
+
+    if len(vertices) % 3 != 0:
+        raise ValueError("Invalid ASCII STL: vertex count is not divisible by 3.")
+
+    return [
+        (vertices[index], vertices[index + 1], vertices[index + 2])
+        for index in range(0, len(vertices), 3)
+    ]
+
+
+def _read_stl_triangles(file_path: str) -> Tuple[List[Triangle], str]:
+    with open(file_path, "rb") as stl_file:
+        data = stl_file.read()
+
+    if len(data) >= 84:
+        triangle_count = struct.unpack("<I", data[80:84])[0]
+        expected_size = 84 + triangle_count * 50
+        if expected_size == len(data):
+            triangles = _read_binary_stl(data, triangle_count)
+            if triangles:
+                return triangles, "binary"
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Invalid STL: binary header size does not match and file is not UTF-8 ASCII STL.") from exc
+
+    triangles = _read_ascii_stl(text)
+    if not triangles:
+        raise ValueError("Invalid STL: no triangles found.")
+    return triangles, "ascii"
+
+
+def _triangle_area(triangle: Triangle) -> float:
+    a, b, c = triangle
+    ab = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    ac = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    cross = (
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    )
+    return 0.5 * math.sqrt(cross[0] ** 2 + cross[1] ** 2 + cross[2] ** 2)
+
+
+def _triangle_signed_volume(triangle: Triangle) -> float:
+    a, b, c = triangle
+    return (
+        a[0] * (b[1] * c[2] - b[2] * c[1])
+        - a[1] * (b[0] * c[2] - b[2] * c[0])
+        + a[2] * (b[0] * c[1] - b[1] * c[0])
+    ) / 6.0
+
+
+def _rounded_vertex(vertex: Vertex) -> Vertex:
+    return (round(vertex[0], 8), round(vertex[1], 8), round(vertex[2], 8))
+
+
+def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_path: Optional[str] = None) -> Dict[str, Any]:
+    if not triangles:
+        raise ValueError("Cannot analyze an STL mesh with no triangles.")
+
+    vertices = [vertex for triangle in triangles for vertex in triangle]
+    xs = [vertex[0] for vertex in vertices]
+    ys = [vertex[1] for vertex in vertices]
+    zs = [vertex[2] for vertex in vertices]
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    zmin, zmax = min(zs), max(zs)
+    xlen, ylen, zlen = xmax - xmin, ymax - ymin, zmax - zmin
+
+    edge_counts: Counter[Tuple[Vertex, Vertex]] = Counter()
+    for triangle in triangles:
+        rounded = [_rounded_vertex(vertex) for vertex in triangle]
+        edge_counts[tuple(sorted((rounded[0], rounded[1])))] += 1
+        edge_counts[tuple(sorted((rounded[1], rounded[2])))] += 1
+        edge_counts[tuple(sorted((rounded[2], rounded[0])))] += 1
+
+    boundary_edges = sum(1 for count in edge_counts.values() if count == 1)
+    non_manifold_edges = sum(1 for count in edge_counts.values() if count > 2)
+    watertight = boundary_edges == 0 and non_manifold_edges == 0
+    signed_volume = sum(_triangle_signed_volume(triangle) for triangle in triangles)
+    absolute_tetra_volume = sum(abs(_triangle_signed_volume(triangle)) for triangle in triangles)
+
+    warnings = []
+    if not watertight:
+        warnings.append("Volume is only reliable for closed, consistently oriented STL meshes.")
+
+    result: Dict[str, Any] = {
+        "analysis_type": "stl_mesh",
+        "file": {
+            "path": file_path,
+            "format": "stl",
+            "stl_encoding": stl_encoding,
+            "size_bytes": os.path.getsize(file_path) if file_path else None,
+        },
+        "mesh": {
+            "triangle_count": len(triangles),
+            "vertex_count": len(vertices),
+            "unique_vertex_count": len({_rounded_vertex(vertex) for vertex in vertices}),
+        },
+        "bounding_box": {
+            "xmin": xmin,
+            "ymin": ymin,
+            "zmin": zmin,
+            "xmax": xmax,
+            "ymax": ymax,
+            "zmax": zmax,
+            "xlen": xlen,
+            "ylen": ylen,
+            "zlen": zlen,
+            "center": {
+                "x": xmin + xlen / 2,
+                "y": ymin + ylen / 2,
+                "z": zmin + zlen / 2,
+            },
+        },
+        "measurements": {
+            "surface_area": sum(_triangle_area(triangle) for triangle in triangles),
+            "signed_volume": signed_volume,
+            "volume": abs(signed_volume) if watertight else None,
+            "volume_estimate": abs(signed_volume),
+            "absolute_tetra_volume_sum": absolute_tetra_volume,
+        },
+        "topology": {
+            "edge_count": len(edge_counts),
+            "boundary_edge_count": boundary_edges,
+            "non_manifold_edge_count": non_manifold_edges,
+            "watertight": watertight,
+        },
+        "warnings": warnings,
+    }
+    return result
+
+
+def _import_cad_file(file_path: str, file_format: str) -> Any:
+    if file_format == "step":
+        return cq.importers.importStep(file_path)
+    if file_format == "brep":
+        return cq.importers.importBrep(file_path)
+    if file_format == "bin":
+        return cq.importers.importBin(file_path)
+    if file_format == "dxf":
+        return cq.importers.importDXF(file_path)
+    raise ValueError(f"Unsupported CAD file format: {file_format}")
+
+
+def analyze_cad_file(file_path: str, file_format: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Analyzes an arbitrary CAD file. STL files are parsed as meshes directly;
+    STEP/BREP/BIN/DXF files are imported through CadQuery where supported.
+    """
+    resolved_path = _resolve_existing_file(file_path)
+    normalized_format = _normalize_file_format(resolved_path, file_format)
+
+    if normalized_format == "stl":
+        triangles, stl_encoding = _read_stl_triangles(resolved_path)
+        return _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+
+    shape = _import_cad_file(resolved_path, normalized_format)
+    description = None
+    warnings = []
+    try:
+        description = get_shape_description(shape)
+    except Exception as exc:
+        warnings.append(f"Shape description failed: {exc}")
+
+    return {
+        "analysis_type": "cadquery_shape",
+        "file": {
+            "path": resolved_path,
+            "format": normalized_format,
+            "size_bytes": os.path.getsize(resolved_path),
+        },
+        "properties": get_shape_properties(shape),
+        "description": description,
+        "warnings": warnings,
+    }
+
+
+def _finite_number(value: Any, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number.") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite number.")
+    return number
+
+
+def _axis_mapping(mapping: Optional[Dict[str, float]], default: float, name: str) -> Dict[str, float]:
+    values = {"x": default, "y": default, "z": default}
+    if not mapping:
+        return values
+    for axis, value in mapping.items():
+        axis_name = axis.lower()
+        if axis_name not in values:
+            raise ValueError(f"{name} contains unsupported axis '{axis}'. Use x, y, or z.")
+        values[axis_name] = _finite_number(value, f"{name}.{axis_name}")
+    return values
+
+
+def _scale_vertex(vertex: Vertex, scale: Dict[str, float]) -> Vertex:
+    return (vertex[0] * scale["x"], vertex[1] * scale["y"], vertex[2] * scale["z"])
+
+
+def _rotate_vertex(vertex: Vertex, rotate_degrees: Dict[str, float]) -> Vertex:
+    x, y, z = vertex
+    rx, ry, rz = (
+        math.radians(rotate_degrees["x"]),
+        math.radians(rotate_degrees["y"]),
+        math.radians(rotate_degrees["z"]),
+    )
+
+    cos_x, sin_x = math.cos(rx), math.sin(rx)
+    y, z = y * cos_x - z * sin_x, y * sin_x + z * cos_x
+
+    cos_y, sin_y = math.cos(ry), math.sin(ry)
+    x, z = x * cos_y + z * sin_y, -x * sin_y + z * cos_y
+
+    cos_z, sin_z = math.cos(rz), math.sin(rz)
+    x, y = x * cos_z - y * sin_z, x * sin_z + y * cos_z
+    return (x, y, z)
+
+
+def _translate_vertex(vertex: Vertex, translate: Dict[str, float]) -> Vertex:
+    return (vertex[0] + translate["x"], vertex[1] + translate["y"], vertex[2] + translate["z"])
+
+
+def _transform_triangles(
+    triangles: List[Triangle],
+    scale: Dict[str, float],
+    rotate_degrees: Dict[str, float],
+    center_at_origin: bool,
+    translate: Dict[str, float],
+) -> List[Triangle]:
+    transformed = [
+        tuple(_rotate_vertex(_scale_vertex(vertex, scale), rotate_degrees) for vertex in triangle)
+        for triangle in triangles
+    ]
+
+    if center_at_origin:
+        analysis = _analyze_stl_triangles(transformed, "ascii")
+        center = analysis["bounding_box"]["center"]
+        center_offset = {"x": -center["x"], "y": -center["y"], "z": -center["z"]}
+        transformed = [
+            tuple(_translate_vertex(vertex, center_offset) for vertex in triangle)
+            for triangle in transformed
+        ]
+
+    if any(value != 0.0 for value in translate.values()):
+        transformed = [
+            tuple(_translate_vertex(vertex, translate) for vertex in triangle)
+            for triangle in transformed
+        ]
+
+    return transformed
+
+
+def _write_ascii_stl(file_path: str, triangles: List[Triangle], solid_name: str = "transformed_mesh") -> None:
+    output_dir = os.path.dirname(file_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as stl_file:
+        stl_file.write(f"solid {solid_name}\n")
+        for triangle in triangles:
+            stl_file.write("  facet normal 0 0 0\n")
+            stl_file.write("    outer loop\n")
+            for vertex in triangle:
+                stl_file.write(f"      vertex {vertex[0]:.9g} {vertex[1]:.9g} {vertex[2]:.9g}\n")
+            stl_file.write("    endloop\n")
+            stl_file.write("  endfacet\n")
+        stl_file.write(f"endsolid {solid_name}\n")
+
+
+def transform_stl_mesh(
+    file_path: str,
+    output_path: str,
+    scale: Optional[Dict[str, float]] = None,
+    target_size: Optional[Dict[str, float]] = None,
+    translate: Optional[Dict[str, float]] = None,
+    rotate_degrees: Optional[Dict[str, float]] = None,
+    center_at_origin: bool = False,
+) -> Dict[str, Any]:
+    """
+    Applies deterministic mesh transforms to an STL and writes a new STL.
+    Supports direct scale factors, target bounding-box dimensions, rotation,
+    translation, and optional recentering.
+    """
+    source_path = _resolve_existing_file(file_path)
+    target_path = os.path.abspath(os.path.expanduser(output_path))
+    source_format = _normalize_file_format(source_path, "stl")
+    if source_format != "stl":
+        raise ValueError("transform_stl_mesh only supports STL input.")
+
+    triangles, stl_encoding = _read_stl_triangles(source_path)
+    before = _analyze_stl_triangles(triangles, stl_encoding, source_path)
+    scale_values = _axis_mapping(scale, 1.0, "scale")
+
+    if target_size:
+        dimensions = before["bounding_box"]
+        for axis, target_value in target_size.items():
+            axis_name = axis.lower()
+            if axis_name not in scale_values:
+                raise ValueError(f"target_size contains unsupported axis '{axis}'. Use x, y, or z.")
+            target_number = _finite_number(target_value, f"target_size.{axis_name}")
+            if target_number <= 0:
+                raise ValueError(f"target_size.{axis_name} must be greater than zero.")
+            current_dimension = dimensions[f"{axis_name}len"]
+            if current_dimension == 0:
+                raise ValueError(f"Cannot set target_size.{axis_name}: source {axis_name} dimension is zero.")
+            scale_values[axis_name] = target_number / current_dimension
+
+    if any(value == 0.0 for value in scale_values.values()):
+        raise ValueError("Scale values must be non-zero.")
+
+    rotate_values = _axis_mapping(rotate_degrees, 0.0, "rotate_degrees")
+    translate_values = _axis_mapping(translate, 0.0, "translate")
+    transformed_triangles = _transform_triangles(
+        triangles,
+        scale_values,
+        rotate_values,
+        center_at_origin,
+        translate_values,
+    )
+    _write_ascii_stl(target_path, transformed_triangles)
+
+    after = _analyze_stl_triangles(transformed_triangles, "ascii", target_path)
+    return {
+        "source_file": source_path,
+        "output_file": target_path,
+        "applied_transform": {
+            "scale": scale_values,
+            "rotate_degrees": rotate_values,
+            "translate": translate_values,
+            "center_at_origin": center_at_origin,
+        },
+        "before": before,
+        "after": after,
+    }

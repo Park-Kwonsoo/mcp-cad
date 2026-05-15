@@ -8,46 +8,46 @@ REQUIREMENTS_FILE="$SCRIPT_DIR/requirements.txt"
 
 # Check if venv exists, create if not
 if [ ! -d "$VENV_DIR" ]; then
-  echo "Virtual environment not found at $VENV_DIR. Creating..."
-  uv venv "$VENV_DIR"
+  echo "Virtual environment not found at $VENV_DIR. Creating..." >&2
+  uv venv "$VENV_DIR" >&2
   if [ $? -ne 0 ]; then
-    echo "Error: Failed to create virtual environment."
+    echo "Error: Failed to create virtual environment." >&2
     exit 1
   fi
-  echo "Virtual environment created."
+  echo "Virtual environment created." >&2
 
   # Activate and install requirements after creation
-  echo "Activating environment..."
+  echo "Activating environment..." >&2
   source "$VENV_ACTIVATE"
   if [ $? -ne 0 ]; then
-    echo "Error: Failed to activate virtual environment after creation."
+    echo "Error: Failed to activate virtual environment after creation." >&2
     exit 1
   fi
 
   if [ -f "$REQUIREMENTS_FILE" ]; then
-    echo "Installing dependencies from $REQUIREMENTS_FILE..."
-    uv pip install -r "$REQUIREMENTS_FILE"
+    echo "Installing dependencies from $REQUIREMENTS_FILE..." >&2
+    uv pip install -r "$REQUIREMENTS_FILE" >&2
     if [ $? -ne 0 ]; then
-      echo "Error: Failed to install dependencies."
+      echo "Error: Failed to install dependencies." >&2
       # Consider exiting or just warning depending on desired behavior
       # exit 1
     else
-       echo "Dependencies installed."
+       echo "Dependencies installed." >&2
     fi
   else
-    echo "Warning: requirements.txt not found. Skipping dependency installation."
+    echo "Warning: requirements.txt not found. Skipping dependency installation." >&2
   fi
 
 else
   # Activate existing environment
-  echo "Activating existing environment..."
+  echo "Activating existing environment..." >&2
   source "$VENV_ACTIVATE"
   if [ $? -ne 0 ]; then
-    echo "Error: Failed to activate existing virtual environment at $VENV_ACTIVATE."
+    echo "Error: Failed to activate existing virtual environment at $VENV_ACTIVATE." >&2
     exit 1
   fi
 fi
 
 # Run the server in stdio mode, passing through any additional arguments
-echo "Starting server in stdio mode..."
+echo "Starting server in stdio mode..." >&2
 python3 "$SCRIPT_DIR/server.py" --mode stdio "$@" # Ensure python3 is used here too

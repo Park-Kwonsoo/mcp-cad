@@ -21,9 +21,16 @@ from src.mcp_cadquery_server.core import (
     parse_docstring_metadata,
     get_shape_properties as core_get_shape_properties,
     get_shape_description as core_get_shape_description,
+    analyze_cad_file as core_analyze_cad_file,
+    transform_stl_mesh as core_transform_stl_mesh,
 )
 
-from src.mcp_cadquery_server.models import ExecuteCadqueryScriptArgs
+from src.mcp_cadquery_server.models import (
+    ExecuteCadqueryScriptArgs,
+    BuildAndExportStlArgs,
+    AnalyzeCadFileArgs,
+    TransformStlMeshArgs,
+)
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
 from . import state
@@ -125,6 +132,115 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
         error_msg = f"Error during script execution handling: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
+
+
+def handle_build_and_export_stl(request: dict) -> dict:
+    """
+    Builds a CadQuery script and exports one generated shape directly to STL.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling build_and_export_stl request (ID: {request_id})")
+    try:
+        args = BuildAndExportStlArgs(**request.get("arguments", {}))
+        if args.shape_index < 0:
+            raise ValueError("'shape_index' must be a non-negative integer.")
+
+        execution_result = handle_execute_cadquery_script({
+            "request_id": request_id,
+            "arguments": {
+                "workspace_path": args.workspace_path,
+                "script": args.script,
+                "parameters": args.parameters,
+            },
+        })
+
+        execution_summaries = execution_result.get("results", [])
+        if not execution_summaries or not execution_summaries[0].get("success"):
+            error = execution_summaries[0].get("error") if execution_summaries else "Script produced no result."
+            raise RuntimeError(f"CadQuery build failed: {error}")
+        if execution_summaries[0].get("shapes_count", 0) <= args.shape_index:
+            raise RuntimeError(f"CadQuery build produced no shape at index {args.shape_index}.")
+
+        result_id = f"{request_id}_0"
+        export_result = handle_export_shape({
+            "request_id": request_id,
+            "arguments": {
+                "workspace_path": args.workspace_path,
+                "result_id": result_id,
+                "shape_index": args.shape_index,
+                "filename": args.filename,
+                "format": "STL",
+                "options": args.export_options or {},
+            },
+        })
+
+        analysis = None
+        try:
+            analysis = core_analyze_cad_file(export_result["filename"], "stl")
+        except Exception as analysis_error:
+            log.warning(f"STL analysis failed after export: {analysis_error}")
+
+        return {
+            "success": True,
+            "message": f"CadQuery model built and exported to STL: {export_result['filename']}",
+            "result_id": result_id,
+            "execution": execution_result,
+            "export": export_result,
+            "analysis": analysis,
+        }
+    except Exception as e:
+        error_msg = f"Error during build/export STL handling: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_analyze_cad_file(request: dict) -> dict:
+    """
+    Analyzes an STL or CadQuery-importable CAD file from disk.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling analyze_cad_file request (ID: {request_id})")
+    try:
+        args = AnalyzeCadFileArgs(**request.get("arguments", {}))
+        analysis = core_analyze_cad_file(args.file_path, args.file_format)
+        return {
+            "success": True,
+            "message": f"CAD file analyzed successfully: {analysis['file']['path']}",
+            "analysis": analysis,
+        }
+    except Exception as e:
+        error_msg = f"Error during CAD file analysis: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_transform_stl_mesh(request: dict) -> dict:
+    """
+    Applies deterministic scale/size/rotation/translation transforms to an STL mesh.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling transform_stl_mesh request (ID: {request_id})")
+    try:
+        args = TransformStlMeshArgs(**request.get("arguments", {}))
+        transform_result = core_transform_stl_mesh(
+            file_path=args.file_path,
+            output_path=args.output_path,
+            scale=args.scale,
+            target_size=args.target_size,
+            translate=args.translate,
+            rotate_degrees=args.rotate_degrees,
+            center_at_origin=args.center_at_origin,
+        )
+        return {
+            "success": True,
+            "message": f"STL mesh transformed successfully: {transform_result['output_file']}",
+            "result": transform_result,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL mesh transform: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
 
 def handle_export_shape(request: dict) -> dict:
     """
@@ -694,8 +810,11 @@ def handle_get_shape_description(request: dict) -> dict:
 # Maps tool names to their implementation functions
 tool_handlers = {
     "execute_cadquery_script": handle_execute_cadquery_script,
+    "build_and_export_stl": handle_build_and_export_stl,
     "export_shape": handle_export_shape,
     "export_shape_to_svg": handle_export_shape_to_svg,
+    "analyze_cad_file": handle_analyze_cad_file,
+    "transform_stl_mesh": handle_transform_stl_mesh,
     "scan_part_library": handle_scan_part_library,
     "search_parts": handle_search_parts,
     "launch_cq_editor": handle_launch_cq_editor,

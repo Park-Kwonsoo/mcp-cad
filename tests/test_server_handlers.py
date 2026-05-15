@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.mcp_cadquery_server.web_server import app
 from src.mcp_cadquery_server import state # Import state module
+from src.mcp_cadquery_server.mcp_api import process_tool_request
 
 # --- Test Data ---
 EXAMPLE_PARTS = {
@@ -504,6 +505,95 @@ def test_mcp_execute_launch_cq_editor_success(client):
     # Ideally, we'd check for a success SSE message here, but that's complex with TestClient.
     # Checking the Popen call is the primary goal for this unit test.
     print("POST /mcp/execute launch_cq_editor (Success) test passed.")
+
+
+@patch('src.mcp_cadquery_server.handlers.core_analyze_cad_file')
+def test_process_tool_request_analyze_cad_file(mock_analyze):
+    """Test direct analyze_cad_file tool processing."""
+    mock_analyze.return_value = {
+        "analysis_type": "stl_mesh",
+        "file": {"path": "/tmp/source.stl", "format": "stl"},
+        "mesh": {"triangle_count": 12},
+    }
+
+    response = process_tool_request({
+        "request_id": "test-analyze",
+        "tool_name": "analyze_cad_file",
+        "arguments": {"file_path": "/tmp/source.stl"},
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["request_id"] == "test-analyze"
+    assert response["result"]["success"] is True
+    assert response["result"]["analysis"]["mesh"]["triangle_count"] == 12
+    mock_analyze.assert_called_once_with("/tmp/source.stl", None)
+
+
+@patch('src.mcp_cadquery_server.handlers.core_transform_stl_mesh')
+def test_process_tool_request_transform_stl_mesh(mock_transform):
+    """Test direct transform_stl_mesh tool processing."""
+    mock_transform.return_value = {
+        "output_file": "/tmp/resized.stl",
+        "applied_transform": {"scale": {"x": 2.0, "y": 1.0, "z": 1.0}},
+    }
+
+    response = process_tool_request({
+        "request_id": "test-transform",
+        "tool_name": "transform_stl_mesh",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "output_path": "/tmp/resized.stl",
+            "scale": {"x": 2.0},
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["result"]["output_file"] == "/tmp/resized.stl"
+    mock_transform.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        output_path="/tmp/resized.stl",
+        scale={"x": 2.0},
+        target_size=None,
+        translate=None,
+        rotate_degrees=None,
+        center_at_origin=False,
+    )
+
+
+@patch('src.mcp_cadquery_server.handlers.core_analyze_cad_file')
+@patch('src.mcp_cadquery_server.handlers.handle_export_shape')
+@patch('src.mcp_cadquery_server.handlers.handle_execute_cadquery_script')
+def test_process_tool_request_build_and_export_stl(mock_execute, mock_export, mock_analyze):
+    """Test direct build_and_export_stl tool orchestration."""
+    mock_execute.return_value = {
+        "success": True,
+        "results": [{"result_id": "test-build_0", "success": True, "shapes_count": 1, "error": None}],
+    }
+    mock_export.return_value = {
+        "success": True,
+        "filename": "/tmp/generated.stl",
+        "message": "exported",
+    }
+    mock_analyze.return_value = {"file": {"path": "/tmp/generated.stl"}, "mesh": {"triangle_count": 12}}
+
+    response = process_tool_request({
+        "request_id": "test-build",
+        "tool_name": "build_and_export_stl",
+        "arguments": {
+            "workspace_path": "/tmp/workspace",
+            "script": "import cadquery as cq\nresult = cq.Workplane('XY').box(1, 1, 1)",
+            "filename": "/tmp/generated.stl",
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["result_id"] == "test-build_0"
+    assert response["result"]["analysis"]["mesh"]["triangle_count"] == 12
+    mock_execute.assert_called_once()
+    mock_export.assert_called_once()
+    mock_analyze.assert_called_once_with("/tmp/generated.stl", "stl")
 
 
 @patch('src.mcp_cadquery_server.handlers.subprocess.run')
@@ -1278,26 +1368,25 @@ def test_sse_connection_sends_server_info(mock_get_server_info, MockQueue, clien
 # Import the function needed for the test
 from src.mcp_cadquery_server.mcp_api import get_server_info
 
-def test_stdio_mode_sends_server_info():
+def test_stdio_mode_lists_mcp_tools():
     """
-    Test that running the server in stdio mode prints server_info first.
+    Test that stdio mode speaks MCP JSON-RPC and exposes tools/list.
     """
-    print("\nTesting stdio mode sends server_info...")
-    # Get the expected output by calling the real function
-    # Ensure necessary imports are available if get_server_info relies on them
+    print("\nTesting stdio mode lists MCP tools...")
     try:
         expected_server_info = get_server_info() # Call imported function
     except Exception as e:
         pytest.fail(f"Failed to call get_server_info() in test: {e}")
 
-
-    # Prepare command to run server in stdio mode
-    # Use sys.executable to ensure the correct python interpreter is used
-    # Use the absolute path to server.py
     server_script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'server.py'))
     cmd = [sys.executable, server_script_path, "--mode", "stdio"]
+    stdin_payload = "\n".join([
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "pytest", "version": "0"}}}),
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+        "",
+    ])
 
-    # Run the server as a subprocess
     process = None
     try:
         process = subprocess.Popen(
@@ -1309,20 +1398,13 @@ def test_stdio_mode_sends_server_info():
             encoding='utf-8'
         )
 
-        # Read the first line of output (should be server_info)
-        # Add a timeout to prevent hanging if the server doesn't output
-        stdout_line = ""
         try:
-            # Use communicate with a timeout for safer reading
-            stdout_data, stderr_data = process.communicate(timeout=10) # Increased timeout slightly
-            # Handle potential stderr output for debugging
+            stdout_data, stderr_data = process.communicate(input=stdin_payload, timeout=10)
             if stderr_data:
                 print(f"\nServer stderr:\n{stderr_data}", file=sys.stderr)
-            stdout_line = stdout_data.splitlines()[0] if stdout_data else ""
 
         except subprocess.TimeoutExpired:
-            print("\nServer process timed out waiting for output.", file=sys.stderr)
-            # If communicate times out, terminate/kill and fail
+            print("\nServer process timed out waiting for MCP output.", file=sys.stderr)
             if process and process.poll() is None:
                 print("Terminating timed-out server process...", file=sys.stderr)
                 process.terminate()
@@ -1331,8 +1413,8 @@ def test_stdio_mode_sends_server_info():
                 except subprocess.TimeoutExpired:
                     print("Terminate failed, killing process...", file=sys.stderr)
                     process.kill()
-            pytest.fail("Server did not output server_info within timeout (using communicate).")
-        except Exception as e: # Catch other potential errors during communicate/readline
+            pytest.fail("Server did not output MCP responses within timeout.")
+        except Exception as e:
              print(f"\nError reading server stdout: {e}", file=sys.stderr)
              if process and process.poll() is None:
                  print("Killing server process due to read error...", file=sys.stderr)
@@ -1340,18 +1422,22 @@ def test_stdio_mode_sends_server_info():
              pytest.fail(f"Error reading server stdout: {e}")
 
 
-        # Verify get_server_info was called (this happens in the subprocess, so we can't directly assert mock calls)
-        # Instead, we verify the output matches the mocked return value.
-        assert stdout_line, "Server did not produce any output on stdout."
-
-        # Parse the JSON output
         try:
-            received_info = json.loads(stdout_line)
+            messages = [json.loads(line) for line in stdout_data.splitlines() if line.strip()]
         except json.JSONDecodeError as e:
-            pytest.fail(f"Failed to decode JSON from server stdout: {e}\nOutput: {stdout_line}")
+            pytest.fail(f"Failed to decode JSON from server stdout: {e}\nOutput: {stdout_data}")
 
-        # Assert the received info matches the expected structure and content
-        assert received_info == expected_server_info
+        assert len(messages) == 2
+        initialize_response, tools_response = messages
+        assert initialize_response["id"] == 1
+        assert initialize_response["result"]["serverInfo"]["name"] == expected_server_info["server_name"]
+        assert initialize_response["result"]["capabilities"] == {"tools": {}}
+
+        assert tools_response["id"] == 2
+        tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
+        expected_tool_names = {tool["name"] for tool in expected_server_info["tools"]}
+        assert tool_names == expected_tool_names
+        assert all("inputSchema" in tool for tool in tools_response["result"]["tools"])
 
     finally:
         # Ensure the subprocess is cleaned up robustly
@@ -1369,7 +1455,7 @@ def test_stdio_mode_sends_server_info():
             except Exception as cleanup_err:
                  print(f"Error during process cleanup: {cleanup_err}", file=sys.stderr) # Log other cleanup errors
 
-    print("Stdio mode server_info send test passed.")
+    print("Stdio mode MCP tools/list test passed.")
 
 
 # --- Test Cases for Static File Serving --- (Removed)

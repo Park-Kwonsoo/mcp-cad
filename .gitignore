@@ -37,6 +37,9 @@ yarn-error.log*
 # Render output (if we keep it separate)
 renders/
 frontend/dist/renders/
+test_output/
+test_static_temp_export/
+test_renders_temp/
 
 # IDE / Editor specific
 .vscode/
