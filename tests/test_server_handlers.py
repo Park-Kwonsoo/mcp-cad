@@ -598,6 +598,103 @@ def test_process_tool_request_compare_stl_meshes(mock_compare):
     )
 
 
+@patch('src.mcp_cadquery_server.handlers.core_inspect_stl_sections')
+def test_process_tool_request_inspect_stl_sections(mock_inspect):
+    """Test direct inspect_stl_sections tool processing."""
+    mock_inspect.return_value = {
+        "sections": [{"position": 2.0, "closed_loop_count": 2}],
+    }
+
+    response = process_tool_request({
+        "request_id": "test-sections",
+        "tool_name": "inspect_stl_sections",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "axis": "z",
+            "positions": [2.0],
+            "include_points": True,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["sections"]["sections"][0]["closed_loop_count"] == 2
+    mock_inspect.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        axis="z",
+        positions=[2.0],
+        interval=None,
+        position_count=5,
+        round_decimals=5,
+        include_points=True,
+        max_sections=50,
+    )
+
+
+@patch('src.mcp_cadquery_server.handlers.core_detect_mount_features')
+def test_process_tool_request_detect_mount_features(mock_detect):
+    """Test direct detect_mount_features tool processing."""
+    mock_detect.return_value = {
+        "feature_count": 1,
+        "features": [{"center": {"x": 0.0, "y": 0.0, "z": 2.0}}],
+    }
+
+    response = process_tool_request({
+        "request_id": "test-mount-features",
+        "tool_name": "detect_mount_features",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "axis": "z",
+            "positions": [1.0, 2.0, 3.0],
+            "max_loop_area": 10.0,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["features"]["feature_count"] == 1
+    mock_detect.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        axis="z",
+        positions=[1.0, 2.0, 3.0],
+        interval=None,
+        position_count=9,
+        min_loop_area=1.0,
+        max_loop_area=10.0,
+        min_circularity=0.2,
+        center_tolerance=1.5,
+        round_decimals=5,
+    )
+
+
+@patch('src.mcp_cadquery_server.handlers.core_validate_stl_solid')
+def test_process_tool_request_validate_stl_solid(mock_validate):
+    """Test direct validate_stl_solid tool processing."""
+    mock_validate.return_value = {
+        "success": False,
+        "verdict": "fail",
+        "checks": {"component_count_allowed": False},
+    }
+
+    response = process_tool_request({
+        "request_id": "test-validate-solid",
+        "tool_name": "validate_stl_solid",
+        "arguments": {
+            "file_path": "/tmp/source.stl",
+            "expected_component_count": 1,
+        },
+    })
+
+    assert response["type"] == "tool_result"
+    assert response["result"]["success"] is True
+    assert response["result"]["validation"]["verdict"] == "fail"
+    mock_validate.assert_called_once_with(
+        file_path="/tmp/source.stl",
+        allow_multiple_components=False,
+        expected_component_count=1,
+    )
+
+
 @patch('src.mcp_cadquery_server.handlers.core_analyze_cad_file')
 @patch('src.mcp_cadquery_server.handlers.handle_export_shape')
 @patch('src.mcp_cadquery_server.handlers.handle_execute_cadquery_script')
@@ -629,6 +726,8 @@ def test_process_tool_request_build_and_export_stl(mock_execute, mock_export, mo
     assert response["result"]["result_id"] == "test-build_0"
     assert response["result"]["analysis"]["mesh"]["triangle_count"] == 12
     mock_execute.assert_called_once()
+    executed_script = mock_execute.call_args.args[0]["arguments"]["script"]
+    assert executed_script.rstrip().endswith("show_object(result)")
     mock_export.assert_called_once()
     mock_analyze.assert_called_once_with("/tmp/generated.stl", "stl")
 
@@ -1481,6 +1580,9 @@ def test_stdio_mode_lists_mcp_tools():
         assert "not STL mesh concatenation" in tools_by_name["build_and_export_stl"]["description"]
         assert "dimension edits" in tools_by_name["transform_stl_mesh"]["description"]
         assert "Compare two STL files through MCP" in tools_by_name["compare_stl_meshes"]["description"]
+        assert "Slice an STL through MCP" in tools_by_name["inspect_stl_sections"]["description"]
+        assert "mounting hole/slot candidates" in tools_by_name["detect_mount_features"]["description"]
+        assert "Validate STL printability through MCP" in tools_by_name["validate_stl_solid"]["description"]
 
     finally:
         # Ensure the subprocess is cleaned up robustly

@@ -396,13 +396,13 @@ def _triangle_signed_volume(triangle: Triangle) -> float:
     ) / 6.0
 
 
-def _triangle_component_sizes(
+def _triangle_component_indices(
     triangle_count: int,
     triangle_edges: List[List[Tuple[Vertex, Vertex]]],
     edge_to_triangles: Dict[Tuple[Vertex, Vertex], List[int]],
-) -> List[int]:
+) -> List[List[int]]:
     visited = [False] * triangle_count
-    component_sizes: List[int] = []
+    components: List[List[int]] = []
 
     for start_index in range(triangle_count):
         if visited[start_index]:
@@ -410,18 +410,35 @@ def _triangle_component_sizes(
 
         stack = [start_index]
         visited[start_index] = True
-        size = 0
+        component = []
         while stack:
             triangle_index = stack.pop()
-            size += 1
+            component.append(triangle_index)
             for edge in triangle_edges[triangle_index]:
                 for neighbor_index in edge_to_triangles[edge]:
                     if not visited[neighbor_index]:
                         visited[neighbor_index] = True
                         stack.append(neighbor_index)
-        component_sizes.append(size)
+        components.append(sorted(component))
 
-    return sorted(component_sizes, reverse=True)
+    return sorted(components, key=len, reverse=True)
+
+
+def _triangle_component_summaries(triangles: List[Triangle], components: List[List[int]]) -> List[Dict[str, Any]]:
+    summaries = []
+    for component_index, triangle_indices in enumerate(components):
+        component_triangles = [triangles[index] for index in triangle_indices]
+        vertices = [vertex for triangle in component_triangles for vertex in triangle]
+        summaries.append({
+            "component_index": component_index,
+            "triangle_count": len(component_triangles),
+            "vertex_count": len(vertices),
+            "unique_vertex_count": len({_rounded_vertex(vertex) for vertex in vertices}),
+            "bounding_box": _bounds_for_vertices(vertices),
+            "surface_area": sum(_triangle_area(triangle) for triangle in component_triangles),
+            "volume_estimate": abs(sum(_triangle_signed_volume(triangle) for triangle in component_triangles)),
+        })
+    return summaries
 
 
 def _rounded_vertex(vertex: Vertex) -> Vertex:
@@ -483,7 +500,9 @@ def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_pa
     boundary_edges = sum(1 for count in edge_counts.values() if count == 1)
     non_manifold_edges = sum(1 for count in edge_counts.values() if count > 2)
     watertight = boundary_edges == 0 and non_manifold_edges == 0
-    component_sizes = _triangle_component_sizes(len(triangles), triangle_edges, edge_to_triangles)
+    components = _triangle_component_indices(len(triangles), triangle_edges, edge_to_triangles)
+    component_summaries = _triangle_component_summaries(triangles, components)
+    component_sizes = [component["triangle_count"] for component in component_summaries]
     signed_volume = sum(_triangle_signed_volume(triangle) for triangle in triangles)
     absolute_tetra_volume = sum(abs(_triangle_signed_volume(triangle)) for triangle in triangles)
 
@@ -524,6 +543,7 @@ def _analyze_stl_triangles(triangles: List[Triangle], stl_encoding: str, file_pa
             "smallest_component_triangle_count": component_sizes[-1],
             "component_triangle_counts_sample": component_sizes[:20],
         },
+        "components": component_summaries[:20],
         "warnings": warnings,
     }
     return result
@@ -741,6 +761,530 @@ def compare_stl_meshes(
         "target_only_vertex_bounds": _bounds_for_vertices(target_only_vertices),
         "z_thresholds": threshold_summaries,
         "target_only_z_ranges": range_summaries,
+    }
+
+
+AXIS_INDICES = {"x": 0, "y": 1, "z": 2}
+PLANE_AXES = {
+    "x": ("y", "z"),
+    "y": ("x", "z"),
+    "z": ("x", "y"),
+}
+
+
+def _normalize_axis(axis: str) -> str:
+    normalized = axis.strip().lower()
+    if normalized not in AXIS_INDICES:
+        raise ValueError(f"Unsupported axis '{axis}'. Use x, y, or z.")
+    return normalized
+
+
+def _axis_value(vertex: Vertex, axis: str) -> float:
+    return vertex[AXIS_INDICES[axis]]
+
+
+def _point_key(vertex: Vertex, round_decimals: int) -> Vertex:
+    return (
+        round(vertex[0], round_decimals),
+        round(vertex[1], round_decimals),
+        round(vertex[2], round_decimals),
+    )
+
+
+def _interpolate_vertex(a: Vertex, b: Vertex, da: float, db: float) -> Vertex:
+    t = da / (da - db)
+    return (
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    )
+
+
+def _section_segments_for_triangles(
+    triangles: List[Triangle],
+    axis: str,
+    position: float,
+    round_decimals: int,
+    epsilon: float = 1e-7,
+) -> List[Tuple[Vertex, Vertex]]:
+    segments: List[Tuple[Vertex, Vertex]] = []
+    for triangle in triangles:
+        candidates: List[Vertex] = []
+        edges = ((triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0]))
+        for a, b in edges:
+            da = _axis_value(a, axis) - position
+            db = _axis_value(b, axis) - position
+
+            if abs(da) <= epsilon and abs(db) <= epsilon:
+                candidates.extend([a, b])
+            elif abs(da) <= epsilon:
+                candidates.append(a)
+            elif abs(db) <= epsilon:
+                candidates.append(b)
+            elif da * db < 0:
+                candidates.append(_interpolate_vertex(a, b, da, db))
+
+        unique: Dict[Vertex, Vertex] = {}
+        for point in candidates:
+            unique[_point_key(point, round_decimals)] = point
+        points = list(unique.values())
+        if len(points) < 2:
+            continue
+        if len(points) > 2:
+            farthest_pair = (points[0], points[1])
+            farthest_distance = -1.0
+            for i, point_a in enumerate(points):
+                for point_b in points[i + 1:]:
+                    distance = (
+                        (point_a[0] - point_b[0]) ** 2
+                        + (point_a[1] - point_b[1]) ** 2
+                        + (point_a[2] - point_b[2]) ** 2
+                    )
+                    if distance > farthest_distance:
+                        farthest_distance = distance
+                        farthest_pair = (point_a, point_b)
+            segments.append(farthest_pair)
+        else:
+            segments.append((points[0], points[1]))
+    return segments
+
+
+def _project_point(vertex: Vertex, axis: str) -> Tuple[float, float]:
+    first_axis, second_axis = PLANE_AXES[axis]
+    return (vertex[AXIS_INDICES[first_axis]], vertex[AXIS_INDICES[second_axis]])
+
+
+def _polygon_signed_area(points: List[Vertex], axis: str) -> float:
+    if len(points) < 3:
+        return 0.0
+    projected = [_project_point(point, axis) for point in points]
+    area = 0.0
+    for index, (x1, y1) in enumerate(projected):
+        x2, y2 = projected[(index + 1) % len(projected)]
+        area += x1 * y2 - x2 * y1
+    return area / 2.0
+
+
+def _polyline_perimeter(points: List[Vertex], closed: bool) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    pairs = list(zip(points, points[1:]))
+    if closed:
+        pairs.append((points[-1], points[0]))
+    for a, b in pairs:
+        total += math.sqrt(
+            (a[0] - b[0]) ** 2
+            + (a[1] - b[1]) ** 2
+            + (a[2] - b[2]) ** 2
+        )
+    return total
+
+
+def _polygon_centroid(points: List[Vertex], axis: str, position: float) -> Dict[str, float]:
+    first_axis, second_axis = PLANE_AXES[axis]
+    projected = [_project_point(point, axis) for point in points]
+    signed_area = _polygon_signed_area(points, axis)
+    centroid_values = {"x": 0.0, "y": 0.0, "z": 0.0}
+    centroid_values[axis] = position
+
+    if len(projected) < 3 or abs(signed_area) <= 1e-12:
+        centroid_values[first_axis] = sum(point[0] for point in projected) / len(projected)
+        centroid_values[second_axis] = sum(point[1] for point in projected) / len(projected)
+        return centroid_values
+
+    cx = 0.0
+    cy = 0.0
+    factor_sum = 0.0
+    for index, (x1, y1) in enumerate(projected):
+        x2, y2 = projected[(index + 1) % len(projected)]
+        factor = x1 * y2 - x2 * y1
+        factor_sum += factor
+        cx += (x1 + x2) * factor
+        cy += (y1 + y2) * factor
+    if abs(factor_sum) <= 1e-12:
+        centroid_values[first_axis] = sum(point[0] for point in projected) / len(projected)
+        centroid_values[second_axis] = sum(point[1] for point in projected) / len(projected)
+        return centroid_values
+
+    centroid_values[first_axis] = cx / (3.0 * factor_sum)
+    centroid_values[second_axis] = cy / (3.0 * factor_sum)
+    return centroid_values
+
+
+def _ordered_cycle(
+    component_keys: List[Vertex],
+    adjacency: Dict[Vertex, List[Vertex]],
+) -> Optional[List[Vertex]]:
+    if len(component_keys) < 3 or any(len(adjacency[key]) != 2 for key in component_keys):
+        return None
+
+    start = min(component_keys)
+    ordered = [start]
+    previous = None
+    current = start
+    while True:
+        neighbors = sorted(adjacency[current])
+        next_key = neighbors[0] if neighbors[0] != previous else neighbors[1]
+        if next_key == start:
+            return ordered
+        if next_key in ordered:
+            return None
+        ordered.append(next_key)
+        previous = current
+        current = next_key
+
+
+def _section_loops(
+    segments: List[Tuple[Vertex, Vertex]],
+    axis: str,
+    position: float,
+    round_decimals: int,
+    include_points: bool = False,
+) -> List[Dict[str, Any]]:
+    point_by_key: Dict[Vertex, Vertex] = {}
+    adjacency_sets: Dict[Vertex, set[Vertex]] = defaultdict(set)
+    for a, b in segments:
+        key_a = _point_key(a, round_decimals)
+        key_b = _point_key(b, round_decimals)
+        if key_a == key_b:
+            continue
+        point_by_key[key_a] = a
+        point_by_key[key_b] = b
+        adjacency_sets[key_a].add(key_b)
+        adjacency_sets[key_b].add(key_a)
+
+    adjacency = {key: sorted(neighbors) for key, neighbors in adjacency_sets.items()}
+    visited: set[Vertex] = set()
+    loops: List[Dict[str, Any]] = []
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+        stack = [start]
+        component_keys: List[Vertex] = []
+        visited.add(start)
+        while stack:
+            key = stack.pop()
+            component_keys.append(key)
+            for neighbor in adjacency[key]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+
+        ordered_keys = _ordered_cycle(component_keys, adjacency)
+        closed = ordered_keys is not None
+        keys_for_geometry = ordered_keys or sorted(component_keys)
+        points = [point_by_key[key] for key in keys_for_geometry]
+        signed_area = _polygon_signed_area(points, axis) if closed else None
+        area = abs(signed_area) if signed_area is not None else None
+        perimeter = _polyline_perimeter(points, closed)
+        loop_info: Dict[str, Any] = {
+            "closed": closed,
+            "point_count": len(points),
+            "segment_count": sum(len(adjacency[key]) for key in component_keys) // 2,
+            "area": area,
+            "signed_area": signed_area,
+            "perimeter": perimeter,
+            "centroid": _polygon_centroid(points, axis, position),
+            "bounds": _bounds_for_vertices(points),
+        }
+        if area is not None and perimeter > 0:
+            loop_info["equivalent_radius"] = math.sqrt(area / math.pi)
+            loop_info["circularity"] = min(1.0, 4.0 * math.pi * area / (perimeter ** 2))
+        else:
+            loop_info["equivalent_radius"] = None
+            loop_info["circularity"] = None
+        if include_points:
+            loop_info["points"] = [
+                {"x": point[0], "y": point[1], "z": point[2]}
+                for point in points
+            ]
+        loops.append(loop_info)
+
+    return sorted(loops, key=lambda item: item["area"] or 0.0, reverse=True)
+
+
+def _section_positions(
+    bounds: Dict[str, Any],
+    axis: str,
+    positions: Optional[List[float]],
+    interval: Optional[float],
+    position_count: int,
+) -> List[float]:
+    min_value = bounds[f"{axis}min"]
+    max_value = bounds[f"{axis}max"]
+    if positions:
+        return [_finite_number(position, "positions[]") for position in positions]
+    if interval is not None:
+        step = _finite_number(interval, "interval")
+        if step <= 0:
+            raise ValueError("interval must be greater than zero.")
+        generated = []
+        value = min_value + step
+        while value < max_value:
+            generated.append(value)
+            value += step
+        return generated
+    if position_count <= 0:
+        raise ValueError("position_count must be greater than zero.")
+    if position_count == 1:
+        return [(min_value + max_value) / 2.0]
+    return [
+        min_value + (max_value - min_value) * (index + 1) / (position_count + 1)
+        for index in range(position_count)
+    ]
+
+
+def inspect_stl_sections(
+    file_path: str,
+    axis: str = "z",
+    positions: Optional[List[float]] = None,
+    interval: Optional[float] = None,
+    position_count: int = 5,
+    round_decimals: int = 5,
+    include_points: bool = False,
+    max_sections: int = 50,
+) -> Dict[str, Any]:
+    """
+    Slices an STL mesh with x/y/z planes and reports section loops and bounds.
+    This covers the "read height-by-height cross sections" workflow through MCP.
+    """
+    if not isinstance(round_decimals, int) or round_decimals < 0 or round_decimals > 12:
+        raise ValueError("round_decimals must be an integer from 0 to 12.")
+    if max_sections <= 0:
+        raise ValueError("max_sections must be greater than zero.")
+
+    normalized_axis = _normalize_axis(axis)
+    resolved_path = _resolve_existing_file(file_path)
+    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    analysis = _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+    section_positions = _section_positions(
+        analysis["bounding_box"],
+        normalized_axis,
+        positions,
+        interval,
+        position_count,
+    )
+    if len(section_positions) > max_sections:
+        raise ValueError(f"Requested {len(section_positions)} sections; max_sections is {max_sections}.")
+
+    sections = []
+    for position in section_positions:
+        segments = _section_segments_for_triangles(triangles, normalized_axis, position, round_decimals)
+        loops = _section_loops(segments, normalized_axis, position, round_decimals, include_points)
+        points = [point for segment in segments for point in segment]
+        sections.append({
+            "axis": normalized_axis,
+            "position": position,
+            "segment_count": len(segments),
+            "point_count": len({_point_key(point, round_decimals) for point in points}),
+            "bounds": _bounds_for_vertices(points),
+            "closed_loop_count": sum(1 for loop in loops if loop["closed"]),
+            "open_loop_count": sum(1 for loop in loops if not loop["closed"]),
+            "loops": loops,
+        })
+
+    return {
+        "file": {
+            "path": resolved_path,
+            "format": "stl",
+            "stl_encoding": stl_encoding,
+        },
+        "axis": normalized_axis,
+        "plane_axes": PLANE_AXES[normalized_axis],
+        "bounding_box": analysis["bounding_box"],
+        "sections": sections,
+    }
+
+
+def detect_mount_features(
+    file_path: str,
+    axis: str = "z",
+    positions: Optional[List[float]] = None,
+    interval: Optional[float] = None,
+    position_count: int = 9,
+    min_loop_area: float = 1.0,
+    max_loop_area: Optional[float] = None,
+    min_circularity: float = 0.2,
+    center_tolerance: float = 1.5,
+    round_decimals: int = 5,
+) -> Dict[str, Any]:
+    """
+    Finds likely mounting holes or slots by scanning closed section loops.
+    The largest loop in each section is treated as the outer profile; smaller
+    loops are returned as hole/slot candidates and clustered by center.
+    """
+    normalized_axis = _normalize_axis(axis)
+    min_area = _finite_number(min_loop_area, "min_loop_area")
+    if min_area < 0:
+        raise ValueError("min_loop_area must be non-negative.")
+    max_area = _finite_number(max_loop_area, "max_loop_area") if max_loop_area is not None else None
+    if max_area is not None and max_area < min_area:
+        raise ValueError("max_loop_area must be greater than or equal to min_loop_area.")
+    min_circularity_value = _finite_number(min_circularity, "min_circularity")
+    if min_circularity_value < 0 or min_circularity_value > 1:
+        raise ValueError("min_circularity must be between 0 and 1.")
+    tolerance = _finite_number(center_tolerance, "center_tolerance")
+    if tolerance <= 0:
+        raise ValueError("center_tolerance must be greater than zero.")
+
+    sections_result = inspect_stl_sections(
+        file_path=file_path,
+        axis=normalized_axis,
+        positions=positions,
+        interval=interval,
+        position_count=position_count,
+        round_decimals=round_decimals,
+        include_points=False,
+    )
+    plane_axes = PLANE_AXES[normalized_axis]
+    candidates: List[Dict[str, Any]] = []
+    for section in sections_result["sections"]:
+        closed_loops = [loop for loop in section["loops"] if loop["closed"] and loop["area"] is not None]
+        if len(closed_loops) < 2:
+            continue
+        outer_loop = max(closed_loops, key=lambda loop: loop["area"] or 0.0)
+        for loop in closed_loops:
+            if loop is outer_loop:
+                continue
+            area = loop["area"] or 0.0
+            circularity = loop["circularity"] or 0.0
+            if area < min_area:
+                continue
+            if max_area is not None and area > max_area:
+                continue
+            if circularity < min_circularity_value:
+                continue
+            candidates.append({
+                "axis": normalized_axis,
+                "position": section["position"],
+                "area": area,
+                "perimeter": loop["perimeter"],
+                "equivalent_radius": loop["equivalent_radius"],
+                "circularity": circularity,
+                "centroid": loop["centroid"],
+                "bounds": loop["bounds"],
+            })
+
+    clusters: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_center = candidate["centroid"]
+        assigned_cluster = None
+        for cluster in clusters:
+            center = cluster["center"]
+            distance = math.sqrt(
+                (candidate_center[plane_axes[0]] - center[plane_axes[0]]) ** 2
+                + (candidate_center[plane_axes[1]] - center[plane_axes[1]]) ** 2
+            )
+            if distance <= tolerance:
+                assigned_cluster = cluster
+                break
+        if assigned_cluster is None:
+            assigned_cluster = {
+                "sample_count": 0,
+                "samples": [],
+                "center": {"x": 0.0, "y": 0.0, "z": 0.0},
+            }
+            clusters.append(assigned_cluster)
+        assigned_cluster["samples"].append(candidate)
+        assigned_cluster["sample_count"] += 1
+        for coordinate in ("x", "y", "z"):
+            assigned_cluster["center"][coordinate] = (
+                sum(sample["centroid"][coordinate] for sample in assigned_cluster["samples"])
+                / assigned_cluster["sample_count"]
+            )
+
+    features = []
+    for cluster_index, cluster in enumerate(clusters):
+        samples = cluster["samples"]
+        axis_positions = [sample["position"] for sample in samples]
+        equivalent_radii = [
+            sample["equivalent_radius"] for sample in samples
+            if sample["equivalent_radius"] is not None
+        ]
+        circularities = [sample["circularity"] for sample in samples]
+        sample_vertices = []
+        for sample in samples:
+            bounds = sample["bounds"]
+            if bounds:
+                sample_vertices.extend([
+                    (bounds["xmin"], bounds["ymin"], bounds["zmin"]),
+                    (bounds["xmax"], bounds["ymax"], bounds["zmax"]),
+                ])
+        features.append({
+            "feature_id": f"mount_feature_{cluster_index}",
+            "kind": "hole_or_slot_candidate",
+            "axis": normalized_axis,
+            "sample_count": cluster["sample_count"],
+            "center": cluster["center"],
+            "axis_min": min(axis_positions),
+            "axis_max": max(axis_positions),
+            "axis_span": max(axis_positions) - min(axis_positions),
+            "average_equivalent_radius": (
+                sum(equivalent_radii) / len(equivalent_radii)
+                if equivalent_radii else None
+            ),
+            "average_circularity": sum(circularities) / len(circularities),
+            "bounds": _bounds_for_vertices(sample_vertices),
+            "samples": samples,
+        })
+
+    return {
+        "file": sections_result["file"],
+        "axis": normalized_axis,
+        "plane_axes": plane_axes,
+        "candidate_count": len(candidates),
+        "feature_count": len(features),
+        "features": sorted(features, key=lambda feature: feature["sample_count"], reverse=True),
+        "sections_scanned": len(sections_result["sections"]),
+    }
+
+
+def validate_stl_solid(
+    file_path: str,
+    allow_multiple_components: bool = False,
+    expected_component_count: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Runs printable-solid checks for STL files and summarizes failure reasons.
+    """
+    analysis = analyze_cad_file(file_path, "stl")
+    topology = analysis["topology"]
+    measurements = analysis["measurements"]
+    component_count = topology["connected_component_count"]
+    allowed_components = (
+        expected_component_count
+        if expected_component_count is not None
+        else (component_count if allow_multiple_components else 1)
+    )
+
+    checks = {
+        "watertight": topology["watertight"],
+        "no_boundary_edges": topology["boundary_edge_count"] == 0,
+        "no_non_manifold_edges": topology["non_manifold_edge_count"] == 0,
+        "component_count_allowed": component_count <= allowed_components,
+        "positive_volume_estimate": measurements["volume_estimate"] > 0,
+    }
+
+    risks = []
+    if not checks["watertight"]:
+        risks.append("Mesh is not watertight; slicers may produce broken toolpaths.")
+    if not checks["no_non_manifold_edges"]:
+        risks.append("Mesh contains non-manifold edges.")
+    if not checks["component_count_allowed"]:
+        risks.append(
+            f"Mesh has {component_count} disconnected components; allowed component count is {allowed_components}."
+        )
+    if not checks["positive_volume_estimate"]:
+        risks.append("Mesh volume estimate is not positive.")
+    risks.extend(analysis.get("warnings", []))
+
+    return {
+        "success": all(checks.values()),
+        "verdict": "pass" if all(checks.values()) else "fail",
+        "checks": checks,
+        "risks": risks,
+        "analysis": analysis,
     }
 
 

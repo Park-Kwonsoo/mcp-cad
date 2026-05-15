@@ -20,6 +20,7 @@ from src.mcp_cadquery_server.env_setup import (
     workspace_reqs_mtime_cache,
     workspace_env_signature_cache,
     BASE_WORKSPACE_PACKAGES,
+    BASE_CADQUERY_VERSION,
     PYTHON_VERSION as ENV_SETUP_PYTHON_VERSION # Import with alias if needed locally
 )
 from src.mcp_cadquery_server import state # Import state for defaults if needed
@@ -38,6 +39,31 @@ def _base_install_call(expected_python_exe, workspace_name):
         ["uv", "pip", "install", *BASE_WORKSPACE_PACKAGES, "--python", str(expected_python_exe)],
         log_prefix=f"WorkspaceEnv({workspace_name})",
     )
+
+
+def _is_base_check_cmd(cmd):
+    return (
+        len(cmd) == 3
+        and str(cmd[0]).endswith(("python", "python.exe"))
+        and cmd[1] == "-c"
+        and "cadquery.__version__" in cmd[2]
+    )
+
+
+def _base_check_call(expected_python_exe, workspace_name):
+    return call(
+        [str(expected_python_exe), "-c", "import cadquery; print(cadquery.__version__)"],
+        check=False,
+        log_prefix=f"WorkspaceEnv({workspace_name})",
+    )
+
+
+def _base_check_missing(cmd):
+    return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="missing cadquery")
+
+
+def _base_check_available(cmd):
+    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=f"{BASE_CADQUERY_VERSION}\n", stderr="")
 
 
 # Note: Environment setup is now handled by prepare_workspace_env per workspace.
@@ -164,6 +190,8 @@ def test_prepare_workspace_env_existing_venv(mock_which, mock_run_helper, tmp_pa
     def side_effect_run_helper(*args, **kwargs):
         cmd = args[0]
         print(f"Mock _run_command_helper called with: {cmd}") # Debug print
+        if _is_base_check_cmd(cmd):
+             return _base_check_missing(cmd)
         if _is_base_install_cmd(cmd):
              # Return dummy success for cadquery install
              return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="cadquery installed", stderr="")
@@ -184,9 +212,11 @@ def test_prepare_workspace_env_existing_venv(mock_which, mock_run_helper, tmp_pa
     assert returned_python_exe == str(expected_python_exe)
     mock_which.assert_called_once_with("uv")
 
-    # Check that only the cadquery install command was run
+    # Check that CadQuery was checked before installing.
+    expected_cq_check_call = _base_check_call(expected_python_exe, workspace_path.name)
     expected_cq_install_call = _base_install_call(expected_python_exe, workspace_path.name)
-    mock_run_helper.assert_called_once_with(*expected_cq_install_call.args, **expected_cq_install_call.kwargs)
+    mock_run_helper.assert_has_calls([expected_cq_check_call, expected_cq_install_call], any_order=False)
+    assert mock_run_helper.call_count == 2
 
     # Ensure venv creation wasn't called
     for mock_call in mock_run_helper.call_args_list:
@@ -197,6 +227,40 @@ def test_prepare_workspace_env_existing_venv(mock_which, mock_run_helper, tmp_pa
         assert "-r" not in mock_call.args[0], "Requirements install should not have been called"
 
     print(f"\nTest test_prepare_workspace_env_existing_venv passed for {workspace_path}")
+
+
+@patch('src.mcp_cadquery_server.env_setup._run_command_helper')
+@patch('shutil.which')
+def test_prepare_workspace_env_existing_venv_skips_base_install_when_available(mock_which, mock_run_helper, tmp_path):
+    """Test existing venv reuse without uv when CadQuery is already installed."""
+    mock_which.return_value = None
+    workspace_path = tmp_path / "existing_ready_workspace"
+    workspace_path.mkdir()
+
+    venv_dir = workspace_path / ".venv"
+    bin_subdir = "Scripts" if sys.platform == "win32" else "bin"
+    expected_python_exe = venv_dir / bin_subdir / ("python.exe" if sys.platform == "win32" else "python")
+    expected_python_exe.parent.mkdir(parents=True, exist_ok=True)
+    expected_python_exe.touch()
+
+    def side_effect_run_helper(*args, **kwargs):
+        cmd = args[0]
+        if _is_base_check_cmd(cmd):
+            return _base_check_available(cmd)
+        raise ValueError(f"Unexpected call to mock_run_helper: {cmd}")
+
+    mock_run_helper.side_effect = side_effect_run_helper
+    workspace_reqs_mtime_cache.pop(str(workspace_path), None)
+    workspace_env_signature_cache.pop(str(workspace_path), None)
+
+    returned_python_exe = prepare_workspace_env(str(workspace_path))
+
+    assert returned_python_exe == str(expected_python_exe)
+    mock_which.assert_not_called()
+    expected_cq_check_call = _base_check_call(expected_python_exe, workspace_path.name)
+    mock_run_helper.assert_called_once_with(*expected_cq_check_call.args, **expected_cq_check_call.kwargs)
+
+    print(f"\nTest test_prepare_workspace_env_existing_venv_skips_base_install_when_available passed for {workspace_path}")
 
 
 
@@ -289,6 +353,8 @@ def test_prepare_workspace_env_requirements_unchanged(mock_which, mock_run_helpe
     def side_effect_run_helper(*args, **kwargs):
         cmd = args[0]
         print(f"Mock _run_command_helper called with: {cmd}")
+        if _is_base_check_cmd(cmd):
+             return _base_check_missing(cmd)
         if _is_base_install_cmd(cmd):
              return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="cadquery installed", stderr="")
         # Requirements install should NOT be called
@@ -315,9 +381,11 @@ def test_prepare_workspace_env_requirements_unchanged(mock_which, mock_run_helpe
     assert returned_python_exe == str(expected_python_exe)
     mock_which.assert_called_once_with("uv")
 
-    # Check that only the cadquery install command was run
+    # Check that CadQuery was checked before installing.
+    expected_cq_check_call = _base_check_call(expected_python_exe, workspace_path.name)
     expected_cq_install_call = _base_install_call(expected_python_exe, workspace_path.name)
-    mock_run_helper.assert_called_once_with(*expected_cq_install_call.args, **expected_cq_install_call.kwargs)
+    mock_run_helper.assert_has_calls([expected_cq_check_call, expected_cq_install_call], any_order=False)
+    assert mock_run_helper.call_count == 2
 
     # Ensure cache value hasn't changed
     assert workspace_reqs_mtime_cache[str(workspace_path)] == reqs_mtime
@@ -348,6 +416,8 @@ def test_prepare_workspace_env_requirements_changed(mock_which, mock_run_helper,
     def side_effect_run_helper(*args, **kwargs):
         cmd = args[0]
         print(f"Mock _run_command_helper called with: {cmd}")
+        if _is_base_check_cmd(cmd):
+             return _base_check_missing(cmd)
         if _is_base_install_cmd(cmd):
              return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="cadquery installed", stderr="")
         elif cmd[0] == "uv" and cmd[1] == "pip" and "-r" in cmd:
@@ -374,15 +444,17 @@ def test_prepare_workspace_env_requirements_changed(mock_which, mock_run_helper,
     assert returned_python_exe == str(expected_python_exe)
     mock_which.assert_called_once_with("uv")
 
-    # Check that cadquery install AND requirements install were called
+    # Check that CadQuery was checked/installed and requirements install was run.
+    expected_cq_check_call = _base_check_call(expected_python_exe, workspace_path.name)
     expected_cq_install_call = _base_install_call(expected_python_exe, workspace_path.name)
     expected_reqs_install_call = call(["uv", "pip", "install", "-r", str(requirements_file), "--python", str(expected_python_exe)], log_prefix=f"WorkspaceEnv({workspace_path.name})")
 
     mock_run_helper.assert_has_calls([
+        expected_cq_check_call,
         expected_cq_install_call,
         expected_reqs_install_call
     ], any_order=False) # Ensure correct order
-    assert mock_run_helper.call_count == 2
+    assert mock_run_helper.call_count == 3
 
     # Check mtime cache was updated to the NEW mtime
     current_mtime = requirements_file.stat().st_mtime # Get the actual current mtime
