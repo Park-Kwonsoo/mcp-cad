@@ -58,7 +58,7 @@ def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScr
 
 def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> dict:
     """
-    Handles the 'execute_cadquery_script' tool request.
+    Run CadQuery Python to create or edit a CAD model when a script is already available.
     Ensures workspace environment exists and executes the script
     within that environment using a persistent CadQuery worker.
     """
@@ -136,7 +136,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
 
 def handle_build_and_export_stl(request: dict) -> dict:
     """
-    Builds a CadQuery script and exports one generated shape directly to STL.
+    Create a 3D-printer-ready STL file from a text or image+text design by running CadQuery Python.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling build_and_export_stl request (ID: {request_id})")
@@ -194,9 +194,16 @@ def handle_build_and_export_stl(request: dict) -> dict:
         raise Exception(error_msg)
 
 
+def handle_create_printable_stl(request: dict) -> dict:
+    """
+    Use this for "make/print/output an STL" requests: generate a printable 3D STL via CadQuery.
+    """
+    return handle_build_and_export_stl(request)
+
+
 def handle_analyze_cad_file(request: dict) -> dict:
     """
-    Analyzes an STL or CadQuery-importable CAD file from disk.
+    Inspect an existing STL/CAD file before redesign, repair, resizing, or 3D printing.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling analyze_cad_file request (ID: {request_id})")
@@ -216,7 +223,7 @@ def handle_analyze_cad_file(request: dict) -> dict:
 
 def handle_transform_stl_mesh(request: dict) -> dict:
     """
-    Applies deterministic scale/size/rotation/translation transforms to an STL mesh.
+    Resize or reposition an existing STL for 3D printing by changing dimensions or transforms.
     """
     request_id = request.get("request_id", "unknown")
     log.info(f"Handling transform_stl_mesh request (ID: {request_id})")
@@ -244,7 +251,7 @@ def handle_transform_stl_mesh(request: dict) -> dict:
 
 def handle_export_shape(request: dict) -> dict:
     """
-    Handles the 'export_shape' tool request.
+    Export a generated CadQuery shape to STL for 3D printing or to STEP/BREP/SVG formats.
     Imports shape from intermediate file and exports to target format/location.
     Resolves relative target paths based on the workspace.
     """
@@ -811,6 +818,7 @@ def handle_get_shape_description(request: dict) -> dict:
 tool_handlers = {
     "execute_cadquery_script": handle_execute_cadquery_script,
     "build_and_export_stl": handle_build_and_export_stl,
+    "create_printable_stl": handle_create_printable_stl,
     "export_shape": handle_export_shape,
     "export_shape_to_svg": handle_export_shape_to_svg,
     "analyze_cad_file": handle_analyze_cad_file,

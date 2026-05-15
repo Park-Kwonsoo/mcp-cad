@@ -3,8 +3,8 @@ from pydantic import BaseModel, Field, root_validator
 
 
 class ExecuteCadqueryScriptArgs(BaseModel):
-    workspace_path: str = Field(..., description="Path to the workspace directory")
-    script: str = Field(..., description="CadQuery script content to execute")
+    workspace_path: str = Field(..., description="Path to the CadQuery workspace directory")
+    script: str = Field(..., description="CadQuery Python script content to execute for creating or editing a CAD model")
     parameter_sets: Optional[List[Dict[str, Any]]] = Field(
         None, description="List of parameter dictionaries for multiple executions"
     )
@@ -26,12 +26,12 @@ class ExecuteCadqueryScriptArgs(BaseModel):
 
 
 class ExportShapeArgs(BaseModel):
-    workspace_path: str = Field(..., description="Path to the workspace directory")
+    workspace_path: str = Field(..., description="Path to the CadQuery workspace directory")
     result_id: str = Field(..., description="Result ID from script execution")
     shape_index: int = Field(0, description="Index of the shape in the result list")
-    filename: str = Field(..., description="Target filename or path for export")
-    format: Optional[str] = Field(None, description="Export format (e.g., STEP, STL)")
-    options: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Export options dictionary")
+    filename: str = Field(..., description="Target filename or path for the exported CAD/3D-print file")
+    format: Optional[str] = Field(None, description="Export format such as STL for 3D printing, STEP, BREP, or SVG")
+    options: Optional[Dict[str, Any]] = Field(default_factory=dict, description="CadQuery export options dictionary")
 
 
 class ExportShapeToSvgArgs(BaseModel):
@@ -43,27 +43,30 @@ class ExportShapeToSvgArgs(BaseModel):
 
 
 class BuildAndExportStlArgs(BaseModel):
-    workspace_path: str = Field(..., description="Path to the workspace directory")
-    script: str = Field(..., description="CadQuery script content to execute")
-    filename: str = Field(..., description="Target STL filename or path")
-    shape_index: int = Field(0, description="Index of the generated shape to export")
-    parameters: Optional[Dict[str, Any]] = Field(None, description="Optional parameter dictionary for the script")
+    workspace_path: str = Field(..., description="Path to the CadQuery workspace directory")
+    script: str = Field(
+        ...,
+        description="CadQuery Python script generated from a text or image+text design request; must create a printable model",
+    )
+    filename: str = Field(..., description="Target .stl filename or path for the 3D-printer-ready output")
+    shape_index: int = Field(0, description="Index of the generated shape to export as STL")
+    parameters: Optional[Dict[str, Any]] = Field(None, description="Optional dimensions or design parameters for the script")
     export_options: Optional[Dict[str, Any]] = Field(default_factory=dict, description="STL export options dictionary")
 
 
 class AnalyzeCadFileArgs(BaseModel):
-    file_path: str = Field(..., description="Path to an STL, STEP/STP, BREP, BIN, or DXF file to analyze")
+    file_path: str = Field(..., description="Path to an existing STL, STEP/STP, BREP, BIN, or DXF file to inspect before redesign, resizing, or 3D printing")
     file_format: Optional[str] = Field(None, description="Optional file format override")
 
 
 class TransformStlMeshArgs(BaseModel):
-    file_path: str = Field(..., description="Path to the source STL file")
-    output_path: str = Field(..., description="Path where the transformed STL file will be written")
-    scale: Optional[Dict[str, float]] = Field(None, description="Per-axis scale factors, e.g. {'x': 2.0}")
-    target_size: Optional[Dict[str, float]] = Field(None, description="Target bounding-box dimensions by axis")
-    translate: Optional[Dict[str, float]] = Field(None, description="Per-axis translation after scaling/rotation")
-    rotate_degrees: Optional[Dict[str, float]] = Field(None, description="Euler rotations in degrees by x/y/z")
-    center_at_origin: bool = Field(False, description="Whether to move the transformed mesh center to the origin")
+    file_path: str = Field(..., description="Path to the source STL file to resize or reposition")
+    output_path: str = Field(..., description="Path where the resized or transformed 3D-printer STL file will be written")
+    scale: Optional[Dict[str, float]] = Field(None, description="Per-axis STL scale factors, e.g. {'x': 2.0}")
+    target_size: Optional[Dict[str, float]] = Field(None, description="Target STL bounding-box dimensions by axis for dimension changes")
+    translate: Optional[Dict[str, float]] = Field(None, description="Per-axis STL translation after scaling/rotation")
+    rotate_degrees: Optional[Dict[str, float]] = Field(None, description="STL Euler rotations in degrees by x/y/z")
+    center_at_origin: bool = Field(False, description="Whether to move the transformed STL mesh center to the origin")
 
 
 class ScanPartLibraryArgs(BaseModel):
