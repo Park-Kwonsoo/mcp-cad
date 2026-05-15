@@ -9,6 +9,7 @@ from typing import Optional
 VENV_DIR = ".venv"
 PYTHON_VERSION = "3.11"
 BASE_WORKSPACE_PACKAGES = ["cadquery==2.5.2"]
+BASE_CADQUERY_VERSION = "2.5.2"
 
 # Cache for workspace requirements.txt modification times
 workspace_reqs_mtime_cache: dict[str, float] = {}
@@ -58,6 +59,36 @@ def _run_command_helper(command: list[str], check: bool = True, log_prefix: str 
         logging.error(f"{log_msg_prefix} An unexpected error occurred running command: {e}")
         raise e
 
+
+def _base_cadquery_available(python_exe: str, log_prefix: str) -> bool:
+    command = [
+        python_exe,
+        "-c",
+        "import cadquery; print(cadquery.__version__)",
+    ]
+    try:
+        process = _run_command_helper(command, check=False, log_prefix=log_prefix)
+    except Exception as exc:
+        logging.info(f"[{log_prefix}] Base CadQuery import check failed: {exc}")
+        return False
+    installed_version = process.stdout.strip()
+    if process.returncode == 0 and installed_version == BASE_CADQUERY_VERSION:
+        logging.info(f"[{log_prefix}] Base CadQuery {installed_version} already installed.")
+        return True
+    logging.info(
+        f"[{log_prefix}] Base CadQuery install needed. "
+        f"Return code: {process.returncode}, detected version: {installed_version or 'none'}"
+    )
+    return False
+
+
+def _ensure_uv_available(log_prefix: str) -> None:
+    if not shutil.which("uv"):
+        msg = "Error: Python 'uv' is not installed or not in PATH. Please install it: https://github.com/astral-sh/uv"
+        logging.error(f"[{log_prefix}] {msg}")
+        raise FileNotFoundError(msg)
+
+
 def prepare_workspace_env(workspace_path: str) -> str:
     """
     Ensures a virtual environment exists in the workspace, creates it if not,
@@ -99,16 +130,20 @@ def prepare_workspace_env(workspace_path: str) -> str:
         logging.info(f"[{log_prefix}] Workspace environment unchanged. Reusing cached Python: {python_exe}")
         return python_exe
 
-    # 2. Check for uv only when setup work may be needed.
-    if not shutil.which("uv"):
-        msg = "Error: Python 'uv' is not installed or not in PATH. Please install it: https://github.com/astral-sh/uv"
-        logging.error(f"[{log_prefix}] {msg}")
-        raise FileNotFoundError(msg)
+    uv_checked = False
+
+    def ensure_uv_once() -> None:
+        nonlocal uv_checked
+        if uv_checked:
+            return
+        _ensure_uv_available(log_prefix)
+        uv_checked = True
 
     try:
         # 3. Create venv if needed
         created_venv = False
         if not os.path.isdir(venv_dir) or not os.path.exists(python_exe):
+            ensure_uv_once()
             logging.info(f"[{log_prefix}] Creating virtual environment in {venv_dir} using Python {PYTHON_VERSION}...")
             _run_command_helper(["uv", "venv", venv_dir, "-p", PYTHON_VERSION], log_prefix=log_prefix)
             logging.info(f"[{log_prefix}] Virtual environment created.")
@@ -123,9 +158,13 @@ def prepare_workspace_env(workspace_path: str) -> str:
 
         # 4. Install base CadQuery packages once per server process for an already-seen env.
         if created_venv or cached_signature is None or cached_signature[0] != python_exe:
-            logging.info(f"[{log_prefix}] Ensuring base CadQuery packages are installed in {venv_dir}...")
-            _run_command_helper(["uv", "pip", "install", *BASE_WORKSPACE_PACKAGES, "--python", python_exe], log_prefix=log_prefix)
-            logging.info(f"[{log_prefix}] Base CadQuery packages installed/verified.")
+            if not created_venv and _base_cadquery_available(python_exe, log_prefix):
+                logging.info(f"[{log_prefix}] Skipping base CadQuery install.")
+            else:
+                ensure_uv_once()
+                logging.info(f"[{log_prefix}] Ensuring base CadQuery packages are installed in {venv_dir}...")
+                _run_command_helper(["uv", "pip", "install", *BASE_WORKSPACE_PACKAGES, "--python", python_exe], log_prefix=log_prefix)
+                logging.info(f"[{log_prefix}] Base CadQuery packages installed/verified.")
         else:
             logging.info(f"[{log_prefix}] Base CadQuery packages already verified for this server process.")
 
@@ -150,6 +189,7 @@ def prepare_workspace_env(workspace_path: str) -> str:
             logging.info(f"[{log_prefix}] No requirements.txt found in workspace. Skipping additional dependencies.")
 
         if install_reqs:
+            ensure_uv_once()
             logging.info(f"[{log_prefix}] Installing/syncing additional dependencies from {requirements_file} into {venv_dir}...")
             try:
                 _run_command_helper(["uv", "pip", "install", "-r", requirements_file, "--python", python_exe], log_prefix=log_prefix)
@@ -165,6 +205,8 @@ def prepare_workspace_env(workspace_path: str) -> str:
         logging.info(f"[{log_prefix}] Environment preparation complete.")
         return python_exe
 
-    except (FileNotFoundError, subprocess.CalledProcessError, Exception) as e:
+    except FileNotFoundError:
+        raise
+    except (subprocess.CalledProcessError, Exception) as e:
         logging.error(f"[{log_prefix}] Failed to set up workspace environment: {e}")
         raise RuntimeError(f"Failed to set up workspace environment for {workspace_path}: {e}") from e

@@ -14,6 +14,9 @@ from src.mcp_cadquery_server.core import (
     analyze_cad_file,
     transform_stl_mesh,
     compare_stl_meshes,
+    inspect_stl_sections,
+    detect_mount_features,
+    validate_stl_solid,
 )
 
 
@@ -161,6 +164,39 @@ endsolid two_tetrahedrons
 """,
         encoding="utf-8",
     )
+
+
+def _write_square_frame_stl(path):
+    """Write a simple open square tube mesh for section-loop tests."""
+    triangles = []
+
+    def quad(a, b, c, d):
+        triangles.append((a, b, c))
+        triangles.append((a, c, d))
+
+    z0, z1 = 0.0, 4.0
+    # Outer square walls.
+    quad((-5, -5, z0), (5, -5, z0), (5, -5, z1), (-5, -5, z1))
+    quad((5, -5, z0), (5, 5, z0), (5, 5, z1), (5, -5, z1))
+    quad((5, 5, z0), (-5, 5, z0), (-5, 5, z1), (5, 5, z1))
+    quad((-5, 5, z0), (-5, -5, z0), (-5, -5, z1), (-5, 5, z1))
+    # Inner through-hole walls.
+    quad((-1, -1, z0), (-1, -1, z1), (1, -1, z1), (1, -1, z0))
+    quad((1, -1, z0), (1, -1, z1), (1, 1, z1), (1, 1, z0))
+    quad((1, 1, z0), (1, 1, z1), (-1, 1, z1), (-1, 1, z0))
+    quad((-1, 1, z0), (-1, 1, z1), (-1, -1, z1), (-1, -1, z0))
+
+    lines = ["solid square_frame"]
+    for triangle in triangles:
+        lines.extend([
+            "  facet normal 0 0 0",
+            "    outer loop",
+            *[f"      vertex {x} {y} {z}" for x, y, z in triangle],
+            "    endloop",
+            "  endfacet",
+        ])
+    lines.append("endsolid square_frame")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -515,6 +551,9 @@ def test_analyze_cad_file_warns_on_disconnected_components(tmp_path):
     assert analysis["topology"]["watertight"] is True
     assert analysis["topology"]["connected_component_count"] == 2
     assert analysis["topology"]["component_triangle_counts_sample"] == [4, 4]
+    assert len(analysis["components"]) == 2
+    assert analysis["components"][0]["triangle_count"] == 4
+    assert analysis["components"][1]["bounding_box"]["xmin"] == pytest.approx(10.0)
     assert any("multiple disconnected mesh components" in warning for warning in analysis["warnings"])
 
 
@@ -572,6 +611,62 @@ def test_compare_stl_meshes_with_translation_and_extra_region(tmp_path):
     assert extra_range["vertex_count"] == 3
     assert extra_range["bounds"]["zmin"] == pytest.approx(10.0)
     assert extra_range["bounds"]["xmax"] == pytest.approx(11.0)
+
+
+def test_inspect_stl_sections_reports_closed_outer_and_inner_loops(tmp_path):
+    """Test height-section loop extraction for mount clearance analysis."""
+    stl_path = tmp_path / "square_frame.stl"
+    _write_square_frame_stl(stl_path)
+
+    result = inspect_stl_sections(str(stl_path), axis="z", positions=[2.0])
+
+    assert result["axis"] == "z"
+    section = result["sections"][0]
+    assert section["segment_count"] == 16
+    assert section["closed_loop_count"] == 2
+    areas = sorted(loop["area"] for loop in section["loops"] if loop["closed"])
+    assert areas[0] == pytest.approx(4.0)
+    assert areas[1] == pytest.approx(100.0)
+
+
+def test_detect_mount_features_clusters_inner_section_loop(tmp_path):
+    """Test hole/slot candidate detection from section loops."""
+    stl_path = tmp_path / "square_frame.stl"
+    _write_square_frame_stl(stl_path)
+
+    result = detect_mount_features(
+        str(stl_path),
+        axis="z",
+        positions=[1.0, 2.0, 3.0],
+        min_loop_area=1.0,
+        max_loop_area=10.0,
+    )
+
+    assert result["candidate_count"] == 3
+    assert result["feature_count"] == 1
+    feature = result["features"][0]
+    assert feature["sample_count"] == 3
+    assert feature["center"]["x"] == pytest.approx(0.0)
+    assert feature["center"]["y"] == pytest.approx(0.0)
+    assert feature["axis_min"] == pytest.approx(1.0)
+    assert feature["axis_max"] == pytest.approx(3.0)
+    assert feature["average_equivalent_radius"] == pytest.approx((4.0 / 3.141592653589793) ** 0.5)
+
+
+def test_validate_stl_solid_flags_unexpected_components(tmp_path):
+    """Test printable-solid validation for disconnected shell risk."""
+    stl_path = tmp_path / "two_tetrahedrons.stl"
+    _write_two_disconnected_tetrahedrons_stl(stl_path)
+
+    failed = validate_stl_solid(str(stl_path))
+    allowed = validate_stl_solid(str(stl_path), expected_component_count=2)
+
+    assert failed["success"] is False
+    assert failed["checks"]["component_count_allowed"] is False
+    assert failed["analysis"]["components"][1]["triangle_count"] == 4
+    assert any("disconnected components" in risk for risk in failed["risks"])
+    assert allowed["success"] is True
+    assert allowed["checks"]["component_count_allowed"] is True
 
 
 def test_analyze_cad_file_unsupported_format(tmp_path):

@@ -24,6 +24,9 @@ from src.mcp_cadquery_server.core import (
     analyze_cad_file as core_analyze_cad_file,
     transform_stl_mesh as core_transform_stl_mesh,
     compare_stl_meshes as core_compare_stl_meshes,
+    inspect_stl_sections as core_inspect_stl_sections,
+    detect_mount_features as core_detect_mount_features,
+    validate_stl_solid as core_validate_stl_solid,
 )
 
 from src.mcp_cadquery_server.models import (
@@ -32,6 +35,9 @@ from src.mcp_cadquery_server.models import (
     AnalyzeCadFileArgs,
     TransformStlMeshArgs,
     CompareStlMeshesArgs,
+    InspectStlSectionsArgs,
+    DetectMountFeaturesArgs,
+    ValidateStlSolidArgs,
 )
 from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
 
@@ -56,6 +62,46 @@ def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScr
             return ExecuteCadqueryScriptArgs(**args.get("arguments", {})), request_id
         return ExecuteCadqueryScriptArgs(**args), request_id
     raise TypeError(f"Unsupported execute_cadquery_script argument type: {type(args)}")
+
+
+def _script_calls_show_object(script_content: str) -> bool:
+    tree = ast.parse(script_content)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "show_object":
+            return True
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "show_object":
+            return True
+    return False
+
+
+def _script_assigns_result(script_content: str) -> bool:
+    tree = ast.parse(script_content)
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.NamedExpr):
+            targets = [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id == "result":
+                return True
+    return False
+
+
+def _ensure_exportable_script(script_content: str) -> str:
+    """
+    CadQuery CQGI only exports objects passed through show_object. For build/export
+    tools, accept the common `result = model` convention and expose it explicitly.
+    """
+    if _script_calls_show_object(script_content):
+        return script_content
+    if _script_assigns_result(script_content):
+        return f"{script_content.rstrip()}\n\nshow_object(result)\n"
+    return script_content
 
 
 def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> dict:
@@ -151,7 +197,7 @@ def handle_build_and_export_stl(request: dict) -> dict:
             "request_id": request_id,
             "arguments": {
                 "workspace_path": args.workspace_path,
-                "script": args.script,
+                "script": _ensure_exportable_script(args.script),
                 "parameters": args.parameters,
             },
         })
@@ -275,6 +321,90 @@ def handle_compare_stl_meshes(request: dict) -> dict:
         }
     except Exception as e:
         error_msg = f"Error during STL mesh comparison: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_inspect_stl_sections(request: dict) -> dict:
+    """
+    Slice an STL through MCP to read height/axis section loops, bounds, and possible hole profiles.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling inspect_stl_sections request (ID: {request_id})")
+    try:
+        args = InspectStlSectionsArgs(**request.get("arguments", {}))
+        section_result = core_inspect_stl_sections(
+            file_path=args.file_path,
+            axis=args.axis,
+            positions=args.positions,
+            interval=args.interval,
+            position_count=args.position_count,
+            round_decimals=args.round_decimals,
+            include_points=args.include_points,
+            max_sections=args.max_sections,
+        )
+        return {
+            "success": True,
+            "message": "STL sections inspected successfully.",
+            "sections": section_result,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL section inspection: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_detect_mount_features(request: dict) -> dict:
+    """
+    Detect mounting hole/slot candidates from STL section loops through MCP.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling detect_mount_features request (ID: {request_id})")
+    try:
+        args = DetectMountFeaturesArgs(**request.get("arguments", {}))
+        features = core_detect_mount_features(
+            file_path=args.file_path,
+            axis=args.axis,
+            positions=args.positions,
+            interval=args.interval,
+            position_count=args.position_count,
+            min_loop_area=args.min_loop_area,
+            max_loop_area=args.max_loop_area,
+            min_circularity=args.min_circularity,
+            center_tolerance=args.center_tolerance,
+            round_decimals=args.round_decimals,
+        )
+        return {
+            "success": True,
+            "message": "STL mount features detected successfully.",
+            "features": features,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL mount feature detection: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_validate_stl_solid(request: dict) -> dict:
+    """
+    Validate STL printability through MCP, including watertightness, manifold edges, and disconnected shells.
+    """
+    request_id = request.get("request_id", "unknown")
+    log.info(f"Handling validate_stl_solid request (ID: {request_id})")
+    try:
+        args = ValidateStlSolidArgs(**request.get("arguments", {}))
+        validation = core_validate_stl_solid(
+            file_path=args.file_path,
+            allow_multiple_components=args.allow_multiple_components,
+            expected_component_count=args.expected_component_count,
+        )
+        return {
+            "success": True,
+            "message": "STL solid validation completed.",
+            "validation": validation,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL solid validation: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
@@ -854,6 +984,9 @@ tool_handlers = {
     "analyze_cad_file": handle_analyze_cad_file,
     "transform_stl_mesh": handle_transform_stl_mesh,
     "compare_stl_meshes": handle_compare_stl_meshes,
+    "inspect_stl_sections": handle_inspect_stl_sections,
+    "detect_mount_features": handle_detect_mount_features,
+    "validate_stl_solid": handle_validate_stl_solid,
     "scan_part_library": handle_scan_part_library,
     "search_parts": handle_search_parts,
     "launch_cq_editor": handle_launch_cq_editor,

@@ -46,7 +46,7 @@ class BuildAndExportStlArgs(BaseModel):
     workspace_path: str = Field(..., description="Path to the CadQuery workspace directory")
     script: str = Field(
         ...,
-        description="CadQuery Python script generated from a text or image+text design request; must create one printable model with real CadQuery boolean unions/cuts instead of STL mesh concatenation",
+        description="CadQuery Python script generated from a text or image+text design request; must create one printable model with real CadQuery boolean unions/cuts instead of STL mesh concatenation; either call show_object(model) or assign the final object to result",
     )
     filename: str = Field(..., description="Target .stl filename or path for the 3D-printer-ready output")
     shape_index: int = Field(0, description="Index of the generated shape to export as STL")
@@ -77,6 +77,36 @@ class CompareStlMeshesArgs(BaseModel):
     round_decimals: int = Field(5, description="Decimal places used when matching STL triangles")
     z_thresholds: Optional[List[float]] = Field(None, description="Optional z-height thresholds for per-region retained/added/removed triangle counts")
     target_only_z_ranges: Optional[List[Dict[str, float]]] = Field(None, description="Optional ranges like {'min_z': 8, 'max_z': 22.1} for bounds of target-only geometry")
+
+
+class InspectStlSectionsArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file to slice through MCP instead of ad hoc local Python")
+    axis: str = Field("z", description="Section axis: x, y, or z")
+    positions: Optional[List[float]] = Field(None, description="Exact section plane positions along axis; use this for known heights")
+    interval: Optional[float] = Field(None, description="Optional spacing between section planes when positions are omitted")
+    position_count: int = Field(5, description="Number of evenly spaced internal section planes when positions and interval are omitted")
+    round_decimals: int = Field(5, description="Decimal places used when connecting section segments into loops")
+    include_points: bool = Field(False, description="Whether to include loop point coordinates in the response")
+    max_sections: int = Field(50, description="Safety cap for generated section count")
+
+
+class DetectMountFeaturesArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file whose mounting holes or slots should be inferred through MCP")
+    axis: str = Field("z", description="Axis to scan with section planes, usually z for height-based mount analysis")
+    positions: Optional[List[float]] = Field(None, description="Exact section positions to scan")
+    interval: Optional[float] = Field(None, description="Optional spacing between scanned sections")
+    position_count: int = Field(9, description="Number of evenly spaced internal sections when positions and interval are omitted")
+    min_loop_area: float = Field(1.0, description="Minimum closed-loop area to consider as a mount hole/slot candidate")
+    max_loop_area: Optional[float] = Field(None, description="Optional maximum closed-loop area to consider")
+    min_circularity: float = Field(0.2, description="Minimum loop circularity; lower values keep slot-like holes")
+    center_tolerance: float = Field(1.5, description="Distance tolerance for clustering the same mount feature across sections")
+    round_decimals: int = Field(5, description="Decimal places used when connecting section segments into loops")
+
+
+class ValidateStlSolidArgs(BaseModel):
+    file_path: str = Field(..., description="Path to an STL file to validate as a printable solid through MCP")
+    allow_multiple_components: bool = Field(False, description="Allow disconnected shells when the design intentionally has multiple printable components")
+    expected_component_count: Optional[int] = Field(None, description="Optional exact/maximum expected disconnected component count")
 
 
 class ScanPartLibraryArgs(BaseModel):
