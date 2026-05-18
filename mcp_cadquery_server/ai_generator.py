@@ -8,7 +8,7 @@ from typing import Any
 import anthropic
 
 
-MODEL = os.environ.get("MCP_CAD_AI_MODEL", "claude-opus-4-7[1m]")
+MODEL = os.environ.get("MCP_CAD_AI_MODEL", "claude-opus-4-7")
 _OP_SECRET_REF = "op://Personal/Anthropic API/credential"
 _DISALLOWED_CALLS = {
     "__import__",

@@ -30,6 +30,7 @@ venv.bak/
 workspace/
 shapes/
 renders/
+models/
 test_output/
 
 # IDE / Editor specific

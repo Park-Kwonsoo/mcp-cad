@@ -76,7 +76,7 @@ def test_generate_cadquery_code_calls_anthropic():
     assert "show_object" in code
     mock_client.assert_called_once_with(api_key="test-key")
     instance.messages.create.assert_called_once()
-    assert instance.messages.create.call_args.kwargs["model"] == "claude-opus-4-7[1m]"
+    assert instance.messages.create.call_args.kwargs["model"] == "claude-opus-4-7"
 
 
 def test_modify_cadquery_code_includes_existing_code():
