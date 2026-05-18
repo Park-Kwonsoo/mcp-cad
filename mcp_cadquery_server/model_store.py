@@ -9,9 +9,14 @@ MODELS_DIR = os.path.expanduser("~/.mcp/mcp-cad/models")
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def _model_dir(models_dir: str, model_id: str) -> str:
+def validate_model_id(model_id: str) -> str:
     if not _MODEL_ID_PATTERN.fullmatch(model_id):
         raise ValueError(f"Invalid model_id: {model_id!r}")
+    return model_id
+
+
+def _model_dir(models_dir: str, model_id: str) -> str:
+    validate_model_id(model_id)
     return os.path.join(models_dir, model_id)
 
 
@@ -98,7 +103,10 @@ def list_models(models_dir: str) -> List[Dict[str, Any]]:
 
     result = []
     for model_id in os.listdir(models_dir):
-        meta_path = _meta_path(models_dir, model_id)
+        try:
+            meta_path = _meta_path(models_dir, model_id)
+        except ValueError:
+            continue
         if not os.path.exists(meta_path):
             continue
         with open(meta_path, encoding="utf-8") as f:

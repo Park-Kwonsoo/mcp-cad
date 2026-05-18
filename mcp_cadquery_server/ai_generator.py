@@ -26,6 +26,14 @@ _DISALLOWED_CALLS = {
     "vars",
 }
 _DISALLOWED_CADQUERY_ATTRS = {"exporters", "importers"}
+_IMAGE_MEDIA_TYPES = {
+    "gif": "image/gif",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+}
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 _SYSTEM_PROMPT = """You are an expert CadQuery developer specializing in functional mechanical parts for 3D printing.
 
@@ -139,23 +147,23 @@ def _response_text(response: Any) -> str:
 
 
 def _image_content(image_path: str) -> dict:
-    with open(image_path, "rb") as f:
-        image_data = base64.standard_b64encode(f.read()).decode("utf-8")
+    resolved_path = os.path.abspath(os.path.expanduser(image_path))
+    ext = os.path.splitext(resolved_path)[1].lower().lstrip(".")
+    if ext not in _IMAGE_MEDIA_TYPES:
+        raise ValueError(f"Unsupported image file type for {image_path!r}.")
+    if not os.path.isfile(resolved_path):
+        raise FileNotFoundError(f"Image file not found: {image_path}")
+    if os.path.getsize(resolved_path) > _MAX_IMAGE_BYTES:
+        raise ValueError("Image file is too large; maximum size is 20 MiB.")
 
-    ext = os.path.splitext(image_path)[1].lower().lstrip(".")
-    media_type = {
-        "gif": "image/gif",
-        "jpg": "image/jpeg",
-        "jpeg": "image/jpeg",
-        "png": "image/png",
-        "webp": "image/webp",
-    }.get(ext, "image/png")
+    with open(resolved_path, "rb") as f:
+        image_data = base64.standard_b64encode(f.read()).decode("utf-8")
 
     return {
         "type": "image",
         "source": {
             "type": "base64",
-            "media_type": media_type,
+            "media_type": _IMAGE_MEDIA_TYPES[ext],
             "data": image_data,
         },
     }

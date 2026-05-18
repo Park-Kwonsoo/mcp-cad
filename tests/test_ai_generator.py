@@ -113,3 +113,11 @@ def test_generate_cadquery_code_with_image(tmp_path):
     messages_str = str(instance.messages.create.call_args)
     assert "image" in messages_str.lower()
     assert "base64" in messages_str.lower()
+
+
+def test_generate_cadquery_code_rejects_non_image_file(tmp_path):
+    text_path = tmp_path / "secret.txt"
+    text_path.write_text("not an image")
+
+    with pytest.raises(ValueError, match="Unsupported image file type"):
+        generate_cadquery_code("use this", image_path=str(text_path))

@@ -33,12 +33,18 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
         ProbeStlTunnelArgs,
         GetShapePropertiesArgs,
         GetShapeDescriptionArgs,
+        GenerateModelArgs,
+        ModifyModelArgs,
+        ListModelsArgs,
     )
 
     schemas = {
         "execute_cadquery_script": _schema_for(ExecuteCadqueryScriptArgs),
         "build_and_export_stl": _schema_for(BuildAndExportStlArgs),
         "create_printable_stl": _schema_for(BuildAndExportStlArgs),
+        "generate_model": _schema_for(GenerateModelArgs),
+        "modify_model": _schema_for(ModifyModelArgs),
+        "list_models": _schema_for(ListModelsArgs),
         "export_shape": _schema_for(ExportShapeArgs),
         "export_shape_to_svg": _schema_for(ExportShapeToSvgArgs),
         "analyze_cad_file": _schema_for(AnalyzeCadFileArgs),

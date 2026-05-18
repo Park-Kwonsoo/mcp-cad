@@ -79,6 +79,15 @@ def test_list_models_returns_all(tmp_models_dir):
     assert "m2" in ids
 
 
+def test_list_models_skips_invalid_directory_names(tmp_models_dir):
+    save_model(tmp_models_dir, "m1", "model 1", "code1", "/tmp/1.stl")
+    os.makedirs(os.path.join(tmp_models_dir, "bad.name"), exist_ok=True)
+
+    result = list_models(tmp_models_dir)
+
+    assert [model["model_id"] for model in result] == ["m1"]
+
+
 def test_load_nonexistent_model_raises(tmp_models_dir):
     with pytest.raises(FileNotFoundError):
         load_model(tmp_models_dir, "nonexistent")
