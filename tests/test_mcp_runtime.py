@@ -28,6 +28,12 @@ from mcp_cadquery_server.schemas.stl import (
     ValidateStlSolidArgs,
 )
 from mcp_cadquery_server.server import create_server
+from mcp_cadquery_server.tools.ai_models import (
+    GENERATE_MODEL_DESCRIPTION_FIELD,
+    GENERATE_MODEL_TOOL_DESCRIPTION,
+    MODIFY_MODEL_INSTRUCTION_FIELD,
+    MODIFY_MODEL_TOOL_DESCRIPTION,
+)
 
 
 EXPECTED_TOOLS = [
@@ -100,6 +106,33 @@ def test_fastmcp_tool_signatures_match_pydantic_arg_models():
             assert set(tool.inputSchema.get("required", [])) == set(model_schema.get("required", []))
 
     anyio.run(check_tool_schemas)
+
+
+def test_ai_model_tool_descriptions_define_non_overlapping_scope():
+    async def check_tool_descriptions():
+        tools = {tool.name: tool for tool in await create_server().list_tools()}
+
+        generate_model = tools["generate_model"]
+        assert generate_model.description == GENERATE_MODEL_TOOL_DESCRIPTION
+        assert "no CadQuery script or STL exists yet" in generate_model.description
+        assert "execute_cadquery_script" in generate_model.description
+        assert "STL tools" in generate_model.description
+        assert (
+            generate_model.inputSchema["properties"]["description"]["description"]
+            == GENERATE_MODEL_DESCRIPTION_FIELD
+        )
+
+        modify_model = tools["modify_model"]
+        assert modify_model.description == MODIFY_MODEL_TOOL_DESCRIPTION
+        assert "model_id" in modify_model.description
+        assert "source" in modify_model.description
+        assert "transform_stl_mesh" in modify_model.description
+        assert (
+            modify_model.inputSchema["properties"]["instruction"]["description"]
+            == MODIFY_MODEL_INSTRUCTION_FIELD
+        )
+
+    anyio.run(check_tool_descriptions)
 
 
 def test_stdio_mcp_client_initialize_and_tools_list():

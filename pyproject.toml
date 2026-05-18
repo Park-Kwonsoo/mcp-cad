@@ -29,3 +29,6 @@ mcp-cadquery = "mcp_cadquery_server.cli:main"
 [tool.setuptools.packages.find]
 include = ["mcp_cadquery_server*"]
 exclude = ["models*", "workspace*", "tests*"]
+
+[tool.setuptools.package-data]
+mcp_cadquery_server = ["tools/prompts/*.md"]

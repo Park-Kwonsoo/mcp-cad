@@ -84,8 +84,8 @@ The server currently registers these tools:
 - `export_shape_to_svg`
 - `get_shape_properties`
 - `get_shape_description`
-- `generate_model`
-- `modify_model`
+- `generate_model` - AI-synthesize a new CadQuery model from natural language or a reference image when no script/STL exists yet
+- `modify_model` - revise the stored CadQuery source for an existing AI-generated `model_id` and append a new version
 - `list_models`
 - `analyze_cad_file`
 - `transform_stl_mesh`
