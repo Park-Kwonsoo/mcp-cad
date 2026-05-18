@@ -4,29 +4,30 @@ import math
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .stl_io import (
+from .mesh_primitives import (
+    AXIS_INDICES,
     PLANE_AXES,
     Triangle,
     Vertex,
-    _add,
-    _analyze_stl_triangles,
-    _axis_value,
-    _bounds_for_vertices,
-    _coerce_vector,
-    _cross,
-    _dot,
-    _finite_number,
-    _interpolate_vertex,
-    _length,
-    _normalize_axis,
-    _normalize_vector,
-    _plane_basis,
-    _point_key,
-    _read_stl_triangles,
-    _resolve_existing_file,
-    _scale,
-    _subtract,
-    _vector_to_dict,
+    add,
+    analyze_stl_triangles,
+    axis_value,
+    bounds_for_vertices,
+    coerce_vector,
+    cross,
+    dot,
+    finite_number,
+    interpolate_vertex,
+    length,
+    normalize_axis,
+    normalize_vector,
+    plane_basis,
+    point_key,
+    read_stl_triangles,
+    resolve_existing_file,
+    scale,
+    subtract,
+    vector_to_dict,
 )
 
 
@@ -42,8 +43,8 @@ def _section_segments_for_triangles(
         candidates: List[Vertex] = []
         edges = ((triangle[0], triangle[1]), (triangle[1], triangle[2]), (triangle[2], triangle[0]))
         for a, b in edges:
-            da = _axis_value(a, axis) - position
-            db = _axis_value(b, axis) - position
+            da = axis_value(a, axis) - position
+            db = axis_value(b, axis) - position
 
             if abs(da) <= epsilon and abs(db) <= epsilon:
                 candidates.extend([a, b])
@@ -52,11 +53,11 @@ def _section_segments_for_triangles(
             elif abs(db) <= epsilon:
                 candidates.append(b)
             elif da * db < 0:
-                candidates.append(_interpolate_vertex(a, b, da, db))
+                candidates.append(interpolate_vertex(a, b, da, db))
 
         unique: Dict[Vertex, Vertex] = {}
         for point in candidates:
-            unique[_point_key(point, round_decimals)] = point
+            unique[point_key(point, round_decimals)] = point
         points = list(unique.values())
         if len(points) < 2:
             continue
@@ -169,8 +170,8 @@ def _section_loops(
     point_by_key: Dict[Vertex, Vertex] = {}
     adjacency_sets: Dict[Vertex, set[Vertex]] = defaultdict(set)
     for a, b in segments:
-        key_a = _point_key(a, round_decimals)
-        key_b = _point_key(b, round_decimals)
+        key_a = point_key(a, round_decimals)
+        key_b = point_key(b, round_decimals)
         if key_a == key_b:
             continue
         point_by_key[key_a] = a
@@ -210,7 +211,7 @@ def _section_loops(
             "signed_area": signed_area,
             "perimeter": perimeter,
             "centroid": _polygon_centroid(points, axis, position),
-            "bounds": _bounds_for_vertices(points),
+            "bounds": bounds_for_vertices(points),
         }
         if area is not None and perimeter > 0:
             loop_info["equivalent_radius"] = math.sqrt(area / math.pi)
@@ -237,9 +238,9 @@ def _section_positions(
     min_value = bounds[f"{axis}min"]
     max_value = bounds[f"{axis}max"]
     if positions:
-        return [_finite_number(position, "positions[]") for position in positions]
+        return [finite_number(position, "positions[]") for position in positions]
     if interval is not None:
-        step = _finite_number(interval, "interval")
+        step = finite_number(interval, "interval")
         if step <= 0:
             raise ValueError("interval must be greater than zero.")
         generated = []
@@ -276,10 +277,10 @@ def inspect_stl_sections(
     if max_sections <= 0:
         raise ValueError("max_sections must be greater than zero.")
 
-    normalized_axis = _normalize_axis(axis)
-    resolved_path = _resolve_existing_file(file_path)
-    triangles, stl_encoding = _read_stl_triangles(resolved_path)
-    analysis = _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+    normalized_axis = normalize_axis(axis)
+    resolved_path = resolve_existing_file(file_path)
+    triangles, stl_encoding = read_stl_triangles(resolved_path)
+    analysis = analyze_stl_triangles(triangles, stl_encoding, resolved_path)
     section_positions = _section_positions(
         analysis["bounding_box"],
         normalized_axis,
@@ -299,8 +300,8 @@ def inspect_stl_sections(
             "axis": normalized_axis,
             "position": position,
             "segment_count": len(segments),
-            "point_count": len({_point_key(point, round_decimals) for point in points}),
-            "bounds": _bounds_for_vertices(points),
+            "point_count": len({point_key(point, round_decimals) for point in points}),
+            "bounds": bounds_for_vertices(points),
             "closed_loop_count": sum(1 for loop in loops if loop["closed"]),
             "open_loop_count": sum(1 for loop in loops if not loop["closed"]),
             "loops": loops,
@@ -335,17 +336,17 @@ def detect_mount_features(
     The largest loop in each section is treated as the outer profile; smaller
     loops are returned as hole/slot candidates and clustered by center.
     """
-    normalized_axis = _normalize_axis(axis)
-    min_area = _finite_number(min_loop_area, "min_loop_area")
+    normalized_axis = normalize_axis(axis)
+    min_area = finite_number(min_loop_area, "min_loop_area")
     if min_area < 0:
         raise ValueError("min_loop_area must be non-negative.")
-    max_area = _finite_number(max_loop_area, "max_loop_area") if max_loop_area is not None else None
+    max_area = finite_number(max_loop_area, "max_loop_area") if max_loop_area is not None else None
     if max_area is not None and max_area < min_area:
         raise ValueError("max_loop_area must be greater than or equal to min_loop_area.")
-    min_circularity_value = _finite_number(min_circularity, "min_circularity")
+    min_circularity_value = finite_number(min_circularity, "min_circularity")
     if min_circularity_value < 0 or min_circularity_value > 1:
         raise ValueError("min_circularity must be between 0 and 1.")
-    tolerance = _finite_number(center_tolerance, "center_tolerance")
+    tolerance = finite_number(center_tolerance, "center_tolerance")
     if tolerance <= 0:
         raise ValueError("center_tolerance must be greater than zero.")
 
@@ -446,7 +447,7 @@ def detect_mount_features(
                 if equivalent_radii else None
             ),
             "average_circularity": sum(circularities) / len(circularities),
-            "bounds": _bounds_for_vertices(sample_vertices),
+            "bounds": bounds_for_vertices(sample_vertices),
             "samples": samples,
         })
 
@@ -461,7 +462,7 @@ def detect_mount_features(
     }
 
 def _plane_signed_distance(point: Vertex, origin: Vertex, normal: Vertex) -> float:
-    return _dot(_subtract(point, origin), normal)
+    return dot(subtract(point, origin), normal)
 
 def _plane_section_segments_for_triangles(
     triangles: List[Triangle],
@@ -484,11 +485,11 @@ def _plane_section_segments_for_triangles(
             elif abs(db) <= epsilon:
                 candidates.append(b)
             elif da * db < 0:
-                candidates.append(_interpolate_vertex(a, b, da, db))
+                candidates.append(interpolate_vertex(a, b, da, db))
 
         unique: Dict[Vertex, Vertex] = {}
         for point in candidates:
-            unique[_point_key(point, round_decimals)] = point
+            unique[point_key(point, round_decimals)] = point
         points = list(unique.values())
         if len(points) < 2:
             continue
@@ -497,7 +498,7 @@ def _plane_section_segments_for_triangles(
             farthest_distance = -1.0
             for i, point_a in enumerate(points):
                 for point_b in points[i + 1:]:
-                    distance = _length(_subtract(point_a, point_b))
+                    distance = length(subtract(point_a, point_b))
                     if distance > farthest_distance:
                         farthest_distance = distance
                         farthest_pair = (point_a, point_b)
@@ -507,8 +508,8 @@ def _plane_section_segments_for_triangles(
     return segments
 
 def _plane_coordinates(point: Vertex, origin: Vertex, x_axis: Vertex, y_axis: Vertex) -> Tuple[float, float]:
-    relative = _subtract(point, origin)
-    return (_dot(relative, x_axis), _dot(relative, y_axis))
+    relative = subtract(point, origin)
+    return (dot(relative, x_axis), dot(relative, y_axis))
 
 def _plane_polygon_signed_area(points: List[Vertex], origin: Vertex, x_axis: Vertex, y_axis: Vertex) -> float:
     if len(points) < 3:
@@ -568,8 +569,8 @@ def _plane_polygon_centroid(
         else:
             u = cu / (3.0 * factor_sum)
             v = cv / (3.0 * factor_sum)
-    global_point = _add(origin, _add(_scale(x_axis, u), _scale(y_axis, v)))
-    return {"plane": {"u": u, "v": v}, "global": _vector_to_dict(global_point)}
+    global_point = add(origin, add(scale(x_axis, u), scale(y_axis, v)))
+    return {"plane": {"u": u, "v": v}, "global": vector_to_dict(global_point)}
 
 def _plane_section_loops(
     segments: List[Tuple[Vertex, Vertex]],
@@ -582,8 +583,8 @@ def _plane_section_loops(
     point_by_key: Dict[Vertex, Vertex] = {}
     adjacency_sets: Dict[Vertex, set[Vertex]] = defaultdict(set)
     for a, b in segments:
-        key_a = _point_key(a, round_decimals)
-        key_b = _point_key(b, round_decimals)
+        key_a = point_key(a, round_decimals)
+        key_b = point_key(b, round_decimals)
         if key_a == key_b:
             continue
         point_by_key[key_a] = a
@@ -623,7 +624,7 @@ def _plane_section_loops(
             "signed_area": signed_area,
             "perimeter": perimeter,
             "centroid": _plane_polygon_centroid(points, origin, x_axis, y_axis),
-            "global_bounds": _bounds_for_vertices(points),
+            "global_bounds": bounds_for_vertices(points),
             "plane_bounds": _plane_bounds(points, origin, x_axis, y_axis),
         }
         if area is not None and perimeter > 0:
@@ -635,7 +636,7 @@ def _plane_section_loops(
         if include_points:
             loop_info["points"] = [
                 {
-                    "global": _vector_to_dict(point),
+                    "global": vector_to_dict(point),
                     "plane": {
                         "u": _plane_coordinates(point, origin, x_axis, y_axis)[0],
                         "v": _plane_coordinates(point, origin, x_axis, y_axis)[1],
@@ -664,20 +665,20 @@ def inspect_stl_plane_sections(
     if max_sections <= 0:
         raise ValueError("max_sections must be greater than zero.")
 
-    resolved_path = _resolve_existing_file(file_path)
-    triangles, stl_encoding = _read_stl_triangles(resolved_path)
-    base_origin = _coerce_vector(origin, "origin")
-    normal_unit, x_axis, y_axis = _plane_basis(
-        _coerce_vector(normal, "normal"),
-        _coerce_vector(x_direction, "x_direction") if x_direction is not None else None,
+    resolved_path = resolve_existing_file(file_path)
+    triangles, stl_encoding = read_stl_triangles(resolved_path)
+    base_origin = coerce_vector(origin, "origin")
+    normal_unit, x_axis, y_axis = plane_basis(
+        coerce_vector(normal, "normal"),
+        coerce_vector(x_direction, "x_direction") if x_direction is not None else None,
     )
-    section_offsets = [_finite_number(offset, "offsets[]") for offset in (offsets or [0.0])]
+    section_offsets = [finite_number(offset, "offsets[]") for offset in (offsets or [0.0])]
     if len(section_offsets) > max_sections:
         raise ValueError(f"Requested {len(section_offsets)} plane sections; max_sections is {max_sections}.")
 
     sections = []
     for offset in section_offsets:
-        section_origin = _add(base_origin, _scale(normal_unit, offset))
+        section_origin = add(base_origin, scale(normal_unit, offset))
         segments = _plane_section_segments_for_triangles(
             triangles,
             section_origin,
@@ -688,10 +689,10 @@ def inspect_stl_plane_sections(
         points = [point for segment in segments for point in segment]
         sections.append({
             "offset": offset,
-            "origin": _vector_to_dict(section_origin),
+            "origin": vector_to_dict(section_origin),
             "segment_count": len(segments),
-            "point_count": len({_point_key(point, round_decimals) for point in points}),
-            "global_bounds": _bounds_for_vertices(points),
+            "point_count": len({point_key(point, round_decimals) for point in points}),
+            "global_bounds": bounds_for_vertices(points),
             "plane_bounds": _plane_bounds(points, section_origin, x_axis, y_axis),
             "closed_loop_count": sum(1 for loop in loops if loop["closed"]),
             "open_loop_count": sum(1 for loop in loops if not loop["closed"]),
@@ -701,10 +702,10 @@ def inspect_stl_plane_sections(
     return {
         "file": {"path": resolved_path, "format": "stl", "stl_encoding": stl_encoding},
         "plane": {
-            "origin": _vector_to_dict(base_origin),
-            "normal": _vector_to_dict(normal_unit),
-            "x_direction": _vector_to_dict(x_axis),
-            "y_direction": _vector_to_dict(y_axis),
+            "origin": vector_to_dict(base_origin),
+            "normal": vector_to_dict(normal_unit),
+            "x_direction": vector_to_dict(x_axis),
+            "y_direction": vector_to_dict(y_axis),
         },
         "sections": sections,
     }

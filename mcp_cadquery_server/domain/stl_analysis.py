@@ -8,24 +8,26 @@ from typing import Any, Dict, List, Optional, Tuple
 import cadquery as cq
 
 from .geometry import get_shape_description, get_shape_properties
-from .stl_io import (
+from .mesh_primitives import (
     Triangle,
     Vertex,
-    _add,
-    _analyze_stl_triangles,
-    _bounds_for_vertices,
-    _coerce_vector,
-    _cross,
-    _dot,
-    _finite_number,
-    _length,
-    _normalize_vector,
-    _read_stl_triangles,
-    _resolve_existing_file,
-    _scale,
-    _stl_triangle_components,
-    _subtract,
-    _triangle_area,
+    add,
+    analyze_stl_triangles,
+    bounds_for_vertices,
+    coerce_vector,
+    cross,
+    dot,
+    finite_number,
+    length,
+    normalize_file_format,
+    normalize_vector,
+    read_stl_triangles,
+    resolve_existing_file,
+    scale,
+    stl_triangle_components,
+    subtract,
+    triangle_area,
+    vector_to_dict,
 )
 
 
@@ -45,12 +47,12 @@ def analyze_cad_file(file_path: str, file_format: Optional[str] = None) -> Dict[
     Analyzes an arbitrary CAD file. STL files are parsed as meshes directly;
     STEP/BREP/BIN/DXF files are imported through CadQuery where supported.
     """
-    resolved_path = _resolve_existing_file(file_path)
-    normalized_format = _normalize_file_format(resolved_path, file_format)
+    resolved_path = resolve_existing_file(file_path)
+    normalized_format = normalize_file_format(resolved_path, file_format)
 
     if normalized_format == "stl":
-        triangles, stl_encoding = _read_stl_triangles(resolved_path)
-        return _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+        triangles, stl_encoding = read_stl_triangles(resolved_path)
+        return analyze_stl_triangles(triangles, stl_encoding, resolved_path)
 
     shape = _import_cad_file(resolved_path, normalized_format)
     description = None
@@ -160,10 +162,10 @@ def compare_stl_meshes(
     if not isinstance(round_decimals, int) or round_decimals < 0 or round_decimals > 12:
         raise ValueError("round_decimals must be an integer from 0 to 12.")
 
-    source_path = _resolve_existing_file(source_file_path)
-    target_path = _resolve_existing_file(target_file_path)
-    source_triangles, source_encoding = _read_stl_triangles(source_path)
-    target_triangles, target_encoding = _read_stl_triangles(target_path)
+    source_path = resolve_existing_file(source_file_path)
+    target_path = resolve_existing_file(target_file_path)
+    source_triangles, source_encoding = read_stl_triangles(source_path)
+    target_triangles, target_encoding = read_stl_triangles(target_path)
 
     source_translate_values = _axis_mapping(source_translate, 0.0, "source_translate")
     target_translate_values = _axis_mapping(target_translate, 0.0, "target_translate")
@@ -185,7 +187,7 @@ def compare_stl_meshes(
     source_only_vertices = _triangle_counter_difference_vertices(source_items, source_only_counter)
 
     threshold_summaries = [
-        _threshold_compare_summary(source_items, target_items, _finite_number(threshold, "z_thresholds[]"))
+        _threshold_compare_summary(source_items, target_items, finite_number(threshold, "z_thresholds[]"))
         for threshold in (z_thresholds or [])
     ]
 
@@ -193,8 +195,8 @@ def compare_stl_meshes(
     for index, z_range in enumerate(target_only_z_ranges or []):
         if not isinstance(z_range, dict):
             raise ValueError("target_only_z_ranges entries must be objects with min_z and max_z.")
-        min_z = _finite_number(z_range.get("min_z"), f"target_only_z_ranges[{index}].min_z")
-        max_z = _finite_number(z_range.get("max_z"), f"target_only_z_ranges[{index}].max_z")
+        min_z = finite_number(z_range.get("min_z"), f"target_only_z_ranges[{index}].min_z")
+        max_z = finite_number(z_range.get("max_z"), f"target_only_z_ranges[{index}].max_z")
         if min_z > max_z:
             raise ValueError(f"target_only_z_ranges[{index}].min_z must be <= max_z.")
         vertices_in_range = [
@@ -205,7 +207,7 @@ def compare_stl_meshes(
             "min_z": min_z,
             "max_z": max_z,
             "vertex_count": len(vertices_in_range),
-            "bounds": _bounds_for_vertices(vertices_in_range),
+            "bounds": bounds_for_vertices(vertices_in_range),
         })
 
     return {
@@ -229,8 +231,8 @@ def compare_stl_meshes(
             "source_retained_ratio": shared_count / source_count if source_count else None,
             "target_reused_ratio": shared_count / target_count if target_count else None,
         },
-        "source_only_vertex_bounds": _bounds_for_vertices(source_only_vertices),
-        "target_only_vertex_bounds": _bounds_for_vertices(target_only_vertices),
+        "source_only_vertex_bounds": bounds_for_vertices(source_only_vertices),
+        "target_only_vertex_bounds": bounds_for_vertices(target_only_vertices),
         "z_thresholds": threshold_summaries,
         "target_only_z_ranges": range_summaries,
     }
@@ -283,7 +285,7 @@ def validate_stl_solid(
     }
 
 def _triangle_to_cq_face(triangle: Triangle) -> cq.Face:
-    if _triangle_area(triangle) <= 1e-12:
+    if triangle_area(triangle) <= 1e-12:
         raise ValueError(f"Cannot create a face from a degenerate STL triangle: {triangle}")
     points = [cq.Vector(*vertex) for vertex in triangle]
     points.append(points[0])
@@ -319,15 +321,15 @@ def solidify_stl_mesh(
     if not output_path:
         raise ValueError("output_path is required.")
 
-    resolved_path = _resolve_existing_file(file_path)
-    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    resolved_path = resolve_existing_file(file_path)
+    triangles, stl_encoding = read_stl_triangles(resolved_path)
     if len(triangles) > max_triangles:
         raise ValueError(
             f"STL has {len(triangles)} triangles, which exceeds max_triangles={max_triangles}. "
             "Increase the limit only for small, intentional conversions."
         )
 
-    analysis = _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+    analysis = analyze_stl_triangles(triangles, stl_encoding, resolved_path)
     topology = analysis["topology"]
     if require_watertight and not topology["watertight"]:
         raise ValueError(
@@ -342,7 +344,7 @@ def solidify_stl_mesh(
             "to export a compound, or rebuild a single boolean-unioned CadQuery model instead."
         )
 
-    components = _stl_triangle_components(triangles)
+    components = stl_triangle_components(triangles)
     solids = [_stl_component_to_solid(triangles, component) for component in components]
     shape_to_export: Any = solids[0] if len(solids) == 1 else cq.Compound.makeCompound(solids)
 
@@ -402,28 +404,28 @@ def solidify_stl_mesh(
 
 def _ray_triangle_intersection(origin: Vertex, direction: Vertex, triangle: Triangle, epsilon: float = 1e-9) -> Optional[float]:
     v0, v1, v2 = triangle
-    edge1 = _subtract(v1, v0)
-    edge2 = _subtract(v2, v0)
-    h = _cross(direction, edge2)
-    determinant = _dot(edge1, h)
+    edge1 = subtract(v1, v0)
+    edge2 = subtract(v2, v0)
+    h = cross(direction, edge2)
+    determinant = dot(edge1, h)
     if -epsilon < determinant < epsilon:
         return None
     inverse_determinant = 1.0 / determinant
-    s = _subtract(origin, v0)
-    u = inverse_determinant * _dot(s, h)
+    s = subtract(origin, v0)
+    u = inverse_determinant * dot(s, h)
     if u < -epsilon or u > 1.0 + epsilon:
         return None
-    q = _cross(s, edge1)
-    v = inverse_determinant * _dot(direction, q)
+    q = cross(s, edge1)
+    v = inverse_determinant * dot(direction, q)
     if v < -epsilon or u + v > 1.0 + epsilon:
         return None
-    t = inverse_determinant * _dot(edge2, q)
+    t = inverse_determinant * dot(edge2, q)
     if t <= epsilon:
         return None
     return t
 
 def _point_inside_mesh(point: Vertex, triangles: List[Triangle]) -> bool:
-    direction = _normalize_vector((1.0, 0.3713906763541037, 0.2179280434782609), "ray direction")
+    direction = normalize_vector((1.0, 0.3713906763541037, 0.2179280434782609), "ray direction")
     intersections = []
     for triangle in triangles:
         distance = _ray_triangle_intersection(point, direction, triangle)
@@ -467,22 +469,22 @@ def probe_stl_tunnel(
     if max_blocked_samples < 0:
         raise ValueError("max_blocked_samples must be non-negative.")
 
-    resolved_path = _resolve_existing_file(file_path)
-    triangles, stl_encoding = _read_stl_triangles(resolved_path)
-    start_point = _coerce_vector(start, "start")
-    end_point = _coerce_vector(end, "end")
-    probe_width = _finite_number(width, "width")
-    probe_height = _finite_number(height, "height")
-    path_vector = _subtract(end_point, start_point)
-    path_length = _length(path_vector)
+    resolved_path = resolve_existing_file(file_path)
+    triangles, stl_encoding = read_stl_triangles(resolved_path)
+    start_point = coerce_vector(start, "start")
+    end_point = coerce_vector(end, "end")
+    probe_width = finite_number(width, "width")
+    probe_height = finite_number(height, "height")
+    path_vector = subtract(end_point, start_point)
+    path_length = length(path_vector)
     if path_length <= 1e-12:
         raise ValueError("start and end must be different points.")
-    path_axis = _normalize_vector(path_vector, "path")
-    up_seed = _coerce_vector(up_direction, "up_direction") if up_direction is not None else (0.0, 0.0, 1.0)
-    if abs(_dot(_normalize_vector(up_seed, "up_direction"), path_axis)) > 0.98:
+    path_axis = normalize_vector(path_vector, "path")
+    up_seed = coerce_vector(up_direction, "up_direction") if up_direction is not None else (0.0, 0.0, 1.0)
+    if abs(dot(normalize_vector(up_seed, "up_direction"), path_axis)) > 0.98:
         up_seed = (1.0, 0.0, 0.0)
-    side_axis = _normalize_vector(_cross(path_axis, up_seed), "side direction")
-    up_axis = _normalize_vector(_cross(side_axis, path_axis), "up direction")
+    side_axis = normalize_vector(cross(path_axis, up_seed), "side direction")
+    up_axis = normalize_vector(cross(side_axis, path_axis), "up direction")
     sample_offsets = _sample_offsets(
         probe_width,
         probe_height,
@@ -496,10 +498,10 @@ def probe_stl_tunnel(
     blocked_count = 0
     for station_index in range(length_samples):
         t = station_index / (length_samples - 1)
-        center = _add(start_point, _scale(path_vector, t))
+        center = add(start_point, scale(path_vector, t))
         station_blocked = 0
         for side_offset, up_offset in sample_offsets:
-            sample_point = _add(center, _add(_scale(side_axis, side_offset), _scale(up_axis, up_offset)))
+            sample_point = add(center, add(scale(side_axis, side_offset), scale(up_axis, up_offset)))
             total_samples += 1
             inside_material = _point_inside_mesh(sample_point, triangles)
             if inside_material:
@@ -509,14 +511,14 @@ def probe_stl_tunnel(
                     blocked_samples.append({
                         "station_index": station_index,
                         "t": t,
-                        "point": _vector_to_dict(sample_point),
+                        "point": vector_to_dict(sample_point),
                         "side_offset": side_offset,
                         "up_offset": up_offset,
                     })
         station_summaries.append({
             "station_index": station_index,
             "t": t,
-            "center": _vector_to_dict(center),
+            "center": vector_to_dict(center),
             "blocked_samples": station_blocked,
             "sample_count": len(sample_offsets),
             "clear": station_blocked == 0,
@@ -525,12 +527,12 @@ def probe_stl_tunnel(
     return {
         "file": {"path": resolved_path, "format": "stl", "stl_encoding": stl_encoding},
         "path": {
-            "start": _vector_to_dict(start_point),
-            "end": _vector_to_dict(end_point),
+            "start": vector_to_dict(start_point),
+            "end": vector_to_dict(end_point),
             "length": path_length,
-            "axis": _vector_to_dict(path_axis),
-            "side_direction": _vector_to_dict(side_axis),
-            "up_direction": _vector_to_dict(up_axis),
+            "axis": vector_to_dict(path_axis),
+            "side_direction": vector_to_dict(side_axis),
+            "up_direction": vector_to_dict(up_axis),
             "width": probe_width,
             "height": probe_height,
         },
@@ -552,7 +554,7 @@ def _axis_mapping(mapping: Optional[Dict[str, float]], default: float, name: str
         axis_name = axis.lower()
         if axis_name not in values:
             raise ValueError(f"{name} contains unsupported axis '{axis}'. Use x, y, or z.")
-        values[axis_name] = _finite_number(value, f"{name}.{axis_name}")
+        values[axis_name] = finite_number(value, f"{name}.{axis_name}")
     return values
 
 def _scale_vertex(vertex: Vertex, scale: Dict[str, float]) -> Vertex:
@@ -592,7 +594,7 @@ def _transform_triangles(
     ]
 
     if center_at_origin:
-        analysis = _analyze_stl_triangles(transformed, "ascii")
+        analysis = analyze_stl_triangles(transformed, "ascii")
         center = analysis["bounding_box"]["center"]
         center_offset = {"x": -center["x"], "y": -center["y"], "z": -center["z"]}
         transformed = [
@@ -637,14 +639,14 @@ def transform_stl_mesh(
     Supports direct scale factors, target bounding-box dimensions, rotation,
     translation, and optional recentering.
     """
-    source_path = _resolve_existing_file(file_path)
+    source_path = resolve_existing_file(file_path)
     target_path = os.path.abspath(os.path.expanduser(output_path))
-    source_format = _normalize_file_format(source_path, "stl")
+    source_format = normalize_file_format(source_path, "stl")
     if source_format != "stl":
         raise ValueError("transform_stl_mesh only supports STL input.")
 
-    triangles, stl_encoding = _read_stl_triangles(source_path)
-    before = _analyze_stl_triangles(triangles, stl_encoding, source_path)
+    triangles, stl_encoding = read_stl_triangles(source_path)
+    before = analyze_stl_triangles(triangles, stl_encoding, source_path)
     scale_values = _axis_mapping(scale, 1.0, "scale")
 
     if target_size:
@@ -653,7 +655,7 @@ def transform_stl_mesh(
             axis_name = axis.lower()
             if axis_name not in scale_values:
                 raise ValueError(f"target_size contains unsupported axis '{axis}'. Use x, y, or z.")
-            target_number = _finite_number(target_value, f"target_size.{axis_name}")
+            target_number = finite_number(target_value, f"target_size.{axis_name}")
             if target_number <= 0:
                 raise ValueError(f"target_size.{axis_name} must be greater than zero.")
             current_dimension = dimensions[f"{axis_name}len"]
@@ -675,7 +677,7 @@ def transform_stl_mesh(
     )
     _write_ascii_stl(target_path, transformed_triangles)
 
-    after = _analyze_stl_triangles(transformed_triangles, "ascii", target_path)
+    after = analyze_stl_triangles(transformed_triangles, "ascii", target_path)
     return {
         "source_file": source_path,
         "output_file": target_path,

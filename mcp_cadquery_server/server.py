@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -17,8 +15,6 @@ def create_server(config: ServerConfig | None = None) -> FastMCP[AppContext]:
 
     @asynccontextmanager
     async def lifespan(_: FastMCP[AppContext]) -> AsyncIterator[AppContext]:
-        os.makedirs(server_config.models_dir, exist_ok=True)
-        os.makedirs(server_config.ai_workspace_dir, exist_ok=True)
         worker_pool = CadQueryWorkerPool()
         try:
             yield AppContext(

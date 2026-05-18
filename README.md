@@ -60,15 +60,18 @@ Dependencies are declared in `pyproject.toml`; this project does not use a
 Runtime artifacts are intentionally ignored by git:
 
 - `.venv-cadquery/` - launcher-managed virtual environment
-- `workspace/` - CadQuery execution workspace
 - `shapes/`, `renders/` - generated exports/previews
-- `models/` - repo-local generated model artifacts, if created from this cwd
-- `~/.mcp/mcp-cad/models/` - default AI model version store
-- `~/.mcp/mcp-cad/workspace/` - default AI generation workspace
+- `~/Library/Application Support/mcp-cadquery/models/` - default AI model version store on macOS
+- `~/Library/Application Support/mcp-cadquery/workspace/` - default AI generation workspace on macOS
 
-Each AI-generated model is stored under `~/.mcp/mcp-cad/models/{model_id}/` with
-versioned CadQuery source files (`v1.py`, `v2.py`, ...), `meta.json`, and the
-latest STL path recorded in metadata.
+On Linux the default runtime root is `$XDG_DATA_HOME/mcp-cadquery` or
+`~/.local/share/mcp-cadquery`; on Windows it is `%APPDATA%\\mcp-cadquery`.
+Override the defaults with `MCP_CAD_MODELS_DIR` and
+`MCP_CAD_AI_WORKSPACE_DIR`.
+
+Each AI-generated model is stored under `{models_dir}/{model_id}/` with versioned
+CadQuery source files (`v1.py`, `v2.py`, ...), `meta.json`, and the latest STL
+path recorded in metadata.
 
 ## MCP Tools
 

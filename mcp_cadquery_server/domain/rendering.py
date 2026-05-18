@@ -5,7 +5,7 @@ import os
 from html import escape
 from typing import Any, Dict, List, Optional, Tuple
 
-from .stl_io import Triangle, Vertex, _analyze_stl_triangles, _read_stl_triangles, _resolve_existing_file
+from .mesh_primitives import Triangle, Vertex, analyze_stl_triangles, read_stl_triangles, resolve_existing_file
 
 
 def _normalize_preview_views(views: Optional[List[str]]) -> List[str]:
@@ -155,10 +155,10 @@ def render_stl_preview(
     if margin < 0:
         raise ValueError("Preview margin cannot be negative.")
 
-    resolved_path = _resolve_existing_file(file_path)
-    triangles, stl_encoding = _read_stl_triangles(resolved_path)
+    resolved_path = resolve_existing_file(file_path)
+    triangles, stl_encoding = read_stl_triangles(resolved_path)
     normalized_views = _normalize_preview_views(views)
-    analysis = _analyze_stl_triangles(triangles, stl_encoding, resolved_path)
+    analysis = analyze_stl_triangles(triangles, stl_encoding, resolved_path)
 
     columns = 2 if len(normalized_views) > 1 else 1
     rows = math.ceil(len(normalized_views) / columns)
