@@ -5,37 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcp-cadquery-server"
 version = "0.1.0"
-authors = [
-  { name="AI Assistant Roo", email="roo@example.com" },
-]
-description = "A FastAPI MCP server for CadQuery operations"
-readme = "README.md"
+description = "A stdio MCP server for CadQuery operations"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License", # Choose appropriate license
     "Operating System :: OS Independent",
 ]
-# Dependencies moved from requirements.txt
 dependencies = [
     "cadquery==2.5.2",
-    "fastapi",
-    "uvicorn[standard]",
-    "sse-starlette",
-    "typer[all]",
-    "python-multipart", # Often needed by FastAPI for form data/uploads
-    "importlib-resources; python_version<'3.10'", # Backport if needed for older pythons
+    "pydantic",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest",
-    "httpx", # For potential future API integration tests
 ]
 
 [project.scripts]
-# This creates the 'mcp-cadquery' command that points to the Typer app
-mcp-cadquery = "mcp_cadquery_server.cli:cli"
-
-[tool.setuptools.packages.find]
-where = ["src"]  # Look for packages in src/
+mcp-cadquery = "mcp_cadquery_server.cli:main"

@@ -2,7 +2,6 @@
 
 import contextlib
 import hashlib
-import json
 import logging
 import os
 import re
@@ -51,7 +50,7 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute one CadQuery job and return the serialized runner result.
 
-    The return schema intentionally matches the legacy script_runner.py output:
+    The return schema is shared by the worker process and the main server:
     success, results, and exception_str.
     """
     output_result: Dict[str, Any] = {"success": False, "results": [], "exception_str": None}
@@ -130,14 +129,3 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
         output_result["exception_str"] = _format_exception(exc)
 
     return output_result
-
-
-def execute_cadquery_job_from_stdin() -> Dict[str, Any]:
-    input_data_str = sys.stdin.read()
-    if not input_data_str:
-        return {
-            "success": False,
-            "results": [],
-            "exception_str": "ValueError: No input data received from stdin.",
-        }
-    return execute_cadquery_job(json.loads(input_data_str))

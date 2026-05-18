@@ -5,15 +5,6 @@ The worker reads one JSON job per line from stdin and writes one JSON response
 per line to stdout. Logs are written to stderr so stdout stays machine-readable.
 """
 
-try:
-    import coverage
-    import os
-
-    if os.environ.get("COVERAGE_RUN_SUBPROCESS"):
-        coverage.process_startup()
-except ImportError:
-    pass
-
 import json
 import logging
 import sys

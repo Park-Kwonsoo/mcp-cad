@@ -1,5 +1,4 @@
 import os
-import re
 import math
 import struct
 import logging
@@ -9,82 +8,9 @@ from typing import Dict, Any, List, Optional, Tuple
 
 # Import CadQuery-related libraries directly needed by core functions
 import cadquery as cq
-from cadquery import cqgi
 from cadquery import exporters
 
 log = logging.getLogger(__name__) # Use standard logging
-
-# --- Core Logic Functions (Moved from server.py) ---
-
-def parse_docstring_metadata(docstring: Optional[str]) -> Dict[str, Any]:
-    """
-    Parses metadata key-value pairs from a Python docstring.
-
-    Looks for lines formatted as 'Key: Value'. Converts keys to lowercase
-    snake_case. Handles 'Tags' key specially, splitting by comma.
-
-    Args:
-        docstring: The docstring to parse.
-
-    Returns:
-        A dictionary containing the parsed metadata.
-    """
-    metadata = {}
-    if not docstring: return metadata
-    lines = docstring.strip().split('\n')
-    for line in lines:
-        line = line.strip()
-        if ':' in line:
-            parts = line.split(':', 1)
-            key_part = parts[0].strip()
-            value = parts[1].strip()
-            # Check if value is non-empty and original key_part doesn't contain spaces
-            # before converting to snake_case and checking isidentifier()
-            if value and ' ' not in key_part:
-                 key = key_part.lower() # No need for replace if no spaces
-                 if key.isidentifier():
-                     if key == 'tags':
-                         metadata[key] = [tag.strip().lower() for tag in value.split(',') if tag.strip()]
-                     else:
-                         metadata[key] = value
-            # Handle known multi-word keys explicitly (like 'Part Name')
-            elif value and key_part.lower() == "part name":
-                 metadata["part_name"] = value
-            # Add other known multi-word keys here if needed
-    return metadata
-
-def execute_cqgi_script(script_content: str) -> cqgi.BuildResult:
-    """Parses and executes a CQGI script."""
-    log.info("Parsing script with CQGI..."); model = cqgi.parse(script_content)
-    log.info("Script parsed."); log.info(f"Building model...")
-    # Build without attempting parameter injection via arguments
-    build_result = model.build(); log.info(f"Model build finished. Success: {build_result.success}")
-    if not build_result.success:
-        log.error(f"Script execution failed: {build_result.exception}")
-        # Don't raise here, let the caller handle the BuildResult
-        # raise Exception(f"Script execution failed: {build_result.exception}")
-    return build_result
-
-def _substitute_parameters(script_lines: List[str], params: Dict[str, Any]) -> List[str]:
-    """Substitutes parameters into script lines marked with # PARAM."""
-    modified_lines = []
-    param_pattern = re.compile(r"^\s*(\w+)\s*=\s*.*#\s*PARAM\s*$")
-    for line in script_lines:
-        match = param_pattern.match(line)
-        if match:
-            param_name = match.group(1)
-            if param_name in params:
-                value = params[param_name]
-                # Format value as Python literal (basic handling)
-                if isinstance(value, str): formatted_value = repr(value)
-                elif isinstance(value, (int, float, bool, list, dict, tuple)) or value is None: formatted_value = repr(value)
-                else: formatted_value = str(value) # Fallback for other types
-                indent = line[:match.start(1)] # Preserve original indentation
-                modified_lines.append(f"{indent}{param_name} = {formatted_value} # PARAM (Substituted)")
-                log.debug(f"Substituted parameter '{param_name}' with value: {formatted_value}")
-                continue # Skip original line
-        modified_lines.append(line)
-    return modified_lines
 
 def export_shape_to_file(shape_to_export: Any, output_path: str, export_format: Optional[str] = None, export_options: Optional[dict] = None):
      """Exports a CadQuery shape/workplane to a specified file."""
