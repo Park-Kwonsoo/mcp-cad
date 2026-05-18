@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections import Counter
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cadquery as cq
 
+from .cad_export import export_shape_to_file
 from .geometry import get_shape_description, get_shape_properties
 from .mesh_primitives import (
     Triangle,
@@ -29,6 +31,8 @@ from .mesh_primitives import (
     triangle_area,
     vector_to_dict,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _import_cad_file(file_path: str, file_format: str) -> Any:
