@@ -40,3 +40,5 @@ test_output/
 *~
 
 workspace
+
+.DS_Store
