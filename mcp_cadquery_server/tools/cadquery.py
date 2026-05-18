@@ -4,8 +4,8 @@ from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_cadquery_server import handlers
-from mcp_cadquery_server.models import ExecuteCadqueryScriptArgs
+from mcp_cadquery_server.schemas.cadquery import ExecuteCadqueryScriptArgs
+from mcp_cadquery_server.services import cadquery as cadquery_service
 
 from ._request import tool_request
 
@@ -25,7 +25,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
             parameter_sets=parameter_sets,
             parameters=parameters,
         )
-        return handlers.handle_execute_cadquery_script(args, request_id=tool_request({})["request_id"])
+        return cadquery_service.handle_execute_cadquery_script(args, request_id=tool_request({})["request_id"])
 
     @mcp.tool()
     def build_and_export_stl(
@@ -37,7 +37,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
         export_options: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Create a 3D-printer-ready STL through MCP/CadQuery using real CadQuery solids."""
-        return handlers.handle_build_and_export_stl(
+        return cadquery_service.handle_build_and_export_stl(
             tool_request(
                 {
                     "workspace_path": workspace_path,
@@ -60,7 +60,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
         export_options: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Use this tool for make/print/output STL requests instead of mesh concatenation."""
-        return handlers.handle_create_printable_stl(
+        return cadquery_service.handle_create_printable_stl(
             tool_request(
                 {
                     "workspace_path": workspace_path,
@@ -83,7 +83,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
         options: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Export a generated CadQuery shape to STL, STEP, BREP, or SVG."""
-        return handlers.handle_export_shape(
+        return cadquery_service.handle_export_shape(
             tool_request(
                 {
                     "workspace_path": workspace_path,
@@ -105,7 +105,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
         options: Optional[dict[str, Any]] = None,
     ) -> dict:
         """Export a generated CadQuery shape to SVG."""
-        return handlers.handle_export_shape_to_svg(
+        return cadquery_service.handle_export_shape_to_svg(
             tool_request(
                 {
                     "workspace_path": workspace_path,
@@ -120,7 +120,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def get_shape_properties(result_id: str, shape_index: int = 0) -> dict:
         """Return properties for a shape created by execute_cadquery_script."""
-        return handlers.handle_get_shape_properties(
+        return cadquery_service.handle_get_shape_properties(
             tool_request(
                 {
                     "result_id": result_id,
@@ -132,7 +132,7 @@ def register_cadquery_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def get_shape_description(result_id: str, shape_index: int = 0) -> dict:
         """Return a textual description for a shape created by execute_cadquery_script."""
-        return handlers.handle_get_shape_description(
+        return cadquery_service.handle_get_shape_description(
             tool_request(
                 {
                     "result_id": result_id,

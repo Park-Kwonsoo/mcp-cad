@@ -4,7 +4,7 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_cadquery_server import handlers
+from mcp_cadquery_server.services import stl as stl_service
 
 from ._request import tool_request
 
@@ -16,7 +16,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def analyze_cad_file(file_path: str, file_format: Optional[str] = None) -> dict:
         """Inspect STL/CAD files for dimensions, watertightness, and mesh topology."""
-        return handlers.handle_analyze_cad_file(
+        return stl_service.handle_analyze_cad_file(
             tool_request(
                 {
                     "file_path": file_path,
@@ -36,7 +36,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         center_at_origin: bool = False,
     ) -> dict:
         """Resize or reposition an STL and write the transformed mesh."""
-        return handlers.handle_transform_stl_mesh(
+        return stl_service.handle_transform_stl_mesh(
             tool_request(
                 {
                     "file_path": file_path,
@@ -61,7 +61,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         target_only_z_ranges: Optional[list[NumberMap]] = None,
     ) -> dict:
         """Compare two STL files to verify redesigns and retained or changed mesh regions."""
-        return handlers.handle_compare_stl_meshes(
+        return stl_service.handle_compare_stl_meshes(
             tool_request(
                 {
                     "source_file_path": source_file_path,
@@ -87,7 +87,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         max_sections: int = 50,
     ) -> dict:
         """Slice an STL along an axis to inspect section loops and bounds."""
-        return handlers.handle_inspect_stl_sections(
+        return stl_service.handle_inspect_stl_sections(
             tool_request(
                 {
                     "file_path": file_path,
@@ -114,7 +114,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         max_sections: int = 25,
     ) -> dict:
         """Slice an STL with arbitrary or tilted planes to inspect loops and clearances."""
-        return handlers.handle_inspect_stl_plane_sections(
+        return stl_service.handle_inspect_stl_plane_sections(
             tool_request(
                 {
                     "file_path": file_path,
@@ -143,7 +143,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         round_decimals: int = 5,
     ) -> dict:
         """Detect mounting hole and slot candidates from STL section loops."""
-        return handlers.handle_detect_mount_features(
+        return stl_service.handle_detect_mount_features(
             tool_request(
                 {
                     "file_path": file_path,
@@ -171,7 +171,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         show_edges: bool = True,
     ) -> dict:
         """Render an STL visual preview as SVG."""
-        return handlers.handle_render_stl_preview(
+        return stl_service.handle_render_stl_preview(
             tool_request(
                 {
                     "file_path": file_path,
@@ -192,7 +192,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         expected_component_count: Optional[int] = None,
     ) -> dict:
         """Validate STL printability, including watertightness and manifold edges."""
-        return handlers.handle_validate_stl_solid(
+        return stl_service.handle_validate_stl_solid(
             tool_request(
                 {
                     "file_path": file_path,
@@ -212,7 +212,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         require_watertight: bool = True,
     ) -> dict:
         """Convert a watertight STL mesh to tessellated BREP or STEP."""
-        return handlers.handle_solidify_stl_mesh(
+        return stl_service.handle_solidify_stl_mesh(
             tool_request(
                 {
                     "file_path": file_path,
@@ -239,7 +239,7 @@ def register_stl_tools(mcp: FastMCP) -> None:
         max_blocked_samples: int = 25,
     ) -> dict:
         """Probe an STL tunnel or cable channel to verify a rectangular passage is clear."""
-        return handlers.handle_probe_stl_tunnel(
+        return stl_service.handle_probe_stl_tunnel(
             tool_request(
                 {
                     "file_path": file_path,

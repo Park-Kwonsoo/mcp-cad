@@ -1,5 +1,5 @@
-from mcp_cadquery_server import handlers
-from mcp_cadquery_server.model_store import load_latest_code, save_model
+from mcp_cadquery_server.services import ai_models
+from mcp_cadquery_server.services.model_store import load_latest_code, save_model
 
 
 GENERATED_CODE = "import cadquery as cq\nresult = cq.Workplane('XY').box(1, 1, 1)\nshow_object(result)"
@@ -22,21 +22,21 @@ def _execution_result(result_id):
 
 def test_generate_model_saves_model_metadata(monkeypatch, tmp_path):
     models_dir = str(tmp_path / "models")
-    monkeypatch.setattr(handlers, "MODELS_DIR", models_dir)
-    monkeypatch.setattr(handlers, "AI_WORKSPACE_DIR", str(tmp_path / "workspace"))
-    monkeypatch.setattr(handlers, "generate_cadquery_code", lambda description, image_path=None: GENERATED_CODE)
+    monkeypatch.setattr(ai_models, "MODELS_DIR", models_dir)
+    monkeypatch.setattr(ai_models, "AI_WORKSPACE_DIR", str(tmp_path / "workspace"))
+    monkeypatch.setattr(ai_models, "generate_cadquery_code", lambda description, image_path=None: GENERATED_CODE)
     monkeypatch.setattr(
-        handlers,
+        ai_models,
         "handle_execute_cadquery_script",
         lambda request: _execution_result(f"{request['request_id']}_0"),
     )
     monkeypatch.setattr(
-        handlers,
+        ai_models,
         "handle_export_shape",
         lambda request: {"success": True, "filename": str(tmp_path / "model_001.stl")},
     )
 
-    result = handlers.handle_generate_model(
+    result = ai_models.handle_generate_model(
         {
             "request_id": "generate",
             "arguments": {
@@ -55,21 +55,21 @@ def test_generate_model_saves_model_metadata(monkeypatch, tmp_path):
 def test_modify_model_appends_version(monkeypatch, tmp_path):
     models_dir = str(tmp_path / "models")
     save_model(models_dir, "model_001", "small box", GENERATED_CODE, "/tmp/v1.stl")
-    monkeypatch.setattr(handlers, "MODELS_DIR", models_dir)
-    monkeypatch.setattr(handlers, "AI_WORKSPACE_DIR", str(tmp_path / "workspace"))
-    monkeypatch.setattr(handlers, "modify_cadquery_code", lambda code, instruction: MODIFIED_CODE)
+    monkeypatch.setattr(ai_models, "MODELS_DIR", models_dir)
+    monkeypatch.setattr(ai_models, "AI_WORKSPACE_DIR", str(tmp_path / "workspace"))
+    monkeypatch.setattr(ai_models, "modify_cadquery_code", lambda code, instruction: MODIFIED_CODE)
     monkeypatch.setattr(
-        handlers,
+        ai_models,
         "handle_execute_cadquery_script",
         lambda request: _execution_result(f"{request['request_id']}_0"),
     )
     monkeypatch.setattr(
-        handlers,
+        ai_models,
         "handle_export_shape",
         lambda request: {"success": True, "filename": str(tmp_path / "model_001.stl")},
     )
 
-    result = handlers.handle_modify_model(
+    result = ai_models.handle_modify_model(
         {
             "request_id": "modify",
             "arguments": {
@@ -85,9 +85,9 @@ def test_modify_model_appends_version(monkeypatch, tmp_path):
 
 
 def test_modify_model_missing_model_returns_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(handlers, "MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setattr(ai_models, "MODELS_DIR", str(tmp_path / "models"))
 
-    result = handlers.handle_modify_model(
+    result = ai_models.handle_modify_model(
         {
             "request_id": "modify",
             "arguments": {
@@ -104,9 +104,9 @@ def test_modify_model_missing_model_returns_error(monkeypatch, tmp_path):
 def test_list_models_returns_store_contents(monkeypatch, tmp_path):
     models_dir = str(tmp_path / "models")
     save_model(models_dir, "model_001", "small box", GENERATED_CODE, "/tmp/v1.stl")
-    monkeypatch.setattr(handlers, "MODELS_DIR", models_dir)
+    monkeypatch.setattr(ai_models, "MODELS_DIR", models_dir)
 
-    result = handlers.handle_list_models({"request_id": "list", "arguments": {}})
+    result = ai_models.handle_list_models({"request_id": "list", "arguments": {}})
 
     assert result["success"] is True
     assert result["count"] == 1

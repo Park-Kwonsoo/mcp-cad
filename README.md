@@ -16,18 +16,35 @@ artifacts.
 │   ├── cli.py                        # CLI wrapper around FastMCP stdio mode
 │   ├── server.py                     # FastMCP server factory and lifespan
 │   ├── config.py                     # Environment/path configuration
-│   ├── app_context.py                # Lifespan application context
-│   ├── tools/                        # FastMCP tool registration modules
-│   ├── handlers.py                   # CAD orchestration handlers
-│   ├── models.py                     # Pydantic tool argument schemas
-│   ├── ai_generator.py               # Anthropic CadQuery generation/modification
-│   ├── model_store.py                # AI model version metadata store
-│   ├── core.py                       # CAD/STL analysis and transformation logic
-│   ├── runner_core.py                # CadQuery script execution core
-│   ├── cadquery_worker.py            # Worker process for CadQuery execution
-│   ├── worker_pool.py                # Worker lifecycle management
+│   ├── context.py                    # Lifespan application context
+│   ├── tools/                        # FastMCP tool surface only
+│   │   ├── cadquery.py               # execute/build/export tool registration
+│   │   ├── stl.py                    # STL analysis/transform/render tool registration
+│   │   └── ai_models.py              # AI model tool registration
+│   ├── schemas/                      # Pydantic input contracts
+│   │   ├── cadquery.py
+│   │   ├── stl.py
+│   │   └── ai_models.py
+│   ├── services/                     # Stateful application services
+│   │   ├── cadquery.py               # CadQuery execution/export workflows
+│   │   ├── stl.py                    # STL tool workflows
+│   │   ├── ai_models.py              # AI model generation/version workflows
+│   │   ├── cadquery_runner.py        # CadQuery script execution core
+│   │   ├── cadquery_worker.py        # Worker process for CadQuery execution
+│   │   ├── worker_pool.py            # Worker lifecycle management
+│   │   ├── workspace_env.py          # Workspace environment setup helpers
+│   │   ├── model_store.py            # AI model version metadata store
+│   │   └── ai_generator.py           # Anthropic CadQuery generation/modification
+│   ├── domain/                       # CAD/STL pure logic and facades
+│   │   ├── cad_export.py
+│   │   ├── geometry.py
+│   │   ├── stl_io.py
+│   │   ├── stl_analysis.py
+│   │   ├── stl_sections.py
+│   │   └── rendering.py
+│   ├── transports/                   # Optional transport adapters
 │   ├── state.py                      # Shared logging/runtime state
-│   └── env_setup.py                  # Environment setup helpers
+│   └── __init__.py
 └── tests/
     ├── test_mcp_runtime.py
     ├── test_model_store.py

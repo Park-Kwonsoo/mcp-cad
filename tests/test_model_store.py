@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from mcp_cadquery_server.model_store import (
+from mcp_cadquery_server.services.model_store import (
     get_model_next_version_path,
     list_models,
     load_latest_code,

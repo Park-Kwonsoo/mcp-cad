@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import ServerConfig
-from .worker_pool import CadQueryWorkerPool
+from .services.worker_pool import CadQueryWorkerPool
 
 
 @dataclass

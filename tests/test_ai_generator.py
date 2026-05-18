@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcp_cadquery_server.ai_generator import (
+from mcp_cadquery_server.services.ai_generator import (
     _extract_code_block,
     _validate_cadquery_code,
     generate_cadquery_code,
@@ -65,7 +65,7 @@ def test_generate_cadquery_code_calls_anthropic():
     generated = "import cadquery as cq\nresult = cq.Workplane('XY').box(10, 10, 5)\nshow_object(result)"
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}), patch(
-        "mcp_cadquery_server.ai_generator.anthropic.Anthropic"
+        "mcp_cadquery_server.services.ai_generator.anthropic.Anthropic"
     ) as mock_client:
         instance = mock_client.return_value
         instance.messages.create.return_value = _mock_response(generated)
@@ -84,7 +84,7 @@ def test_modify_cadquery_code_includes_existing_code():
     generated = "import cadquery as cq\nresult = cq.Workplane('XY').box(20, 20, 5)\nshow_object(result)"
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}), patch(
-        "mcp_cadquery_server.ai_generator.anthropic.Anthropic"
+        "mcp_cadquery_server.services.ai_generator.anthropic.Anthropic"
     ) as mock_client:
         instance = mock_client.return_value
         instance.messages.create.return_value = _mock_response(generated)
@@ -102,7 +102,7 @@ def test_generate_cadquery_code_with_image(tmp_path):
     generated = "import cadquery as cq\nresult = cq.Workplane('XY').box(5, 5, 5)\nshow_object(result)"
 
     with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}), patch(
-        "mcp_cadquery_server.ai_generator.anthropic.Anthropic"
+        "mcp_cadquery_server.services.ai_generator.anthropic.Anthropic"
     ) as mock_client:
         instance = mock_client.return_value
         instance.messages.create.return_value = _mock_response(generated)
