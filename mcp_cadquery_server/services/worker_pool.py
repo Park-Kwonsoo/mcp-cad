@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .state import _MODULE_DIR, log
+from ..state import _MODULE_DIR, log
 
 
 DEFAULT_JOB_TIMEOUT_SECONDS = float(os.environ.get("MCP_CADQUERY_WORKER_TIMEOUT", "300"))
@@ -183,7 +183,7 @@ class CadQueryWorkerPool:
         worker_path: Optional[str] = None,
     ):
         self.max_workers_per_workspace = max(1, max_workers_per_workspace)
-        self.worker_path = worker_path or os.path.join(_MODULE_DIR, "cadquery_worker.py")
+        self.worker_path = worker_path or os.path.join(_MODULE_DIR, "services", "cadquery_worker.py")
         self._groups: Dict[Tuple[str, str], _WorkspaceWorkerGroup] = {}
         self._lock = threading.Lock()
 
@@ -225,6 +225,3 @@ class CadQueryWorkerPool:
                 )
                 self._groups[key] = group
             return group
-
-
-cadquery_worker_pool = CadQueryWorkerPool()

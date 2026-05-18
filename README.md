@@ -9,25 +9,42 @@ artifacts.
 
 ```text
 .
-├── server.py                         # Python entrypoint for stdio MCP
 ├── mcp-cadquery-server.sh            # Launcher used by MCP clients
 ├── pyproject.toml                    # Package metadata and dependencies
-├── docs/
-│   └── mcp-registration.md           # Claude Code, Claude Desktop, Codex setup
 ├── mcp_cadquery_server/
-│   ├── cli.py                        # CLI wrapper around stdio mode
-│   ├── stdio_server.py               # JSON-RPC MCP stdio protocol handling
-│   ├── mcp_api.py                    # Tool schema and dispatch bridge
-│   ├── handlers.py                   # MCP tool handlers
-│   ├── models.py                     # Pydantic tool argument schemas
-│   ├── ai_generator.py               # Anthropic CadQuery generation/modification
-│   ├── model_store.py                # AI model version metadata store
-│   ├── core.py                       # CAD/STL analysis and transformation logic
-│   ├── runner_core.py                # CadQuery script execution core
-│   ├── cadquery_worker.py            # Worker process for CadQuery execution
-│   ├── worker_pool.py                # Worker lifecycle management
-│   ├── state.py                      # Shared logging/runtime state
-│   └── env_setup.py                  # Environment setup helpers
+│   ├── cli.py                        # CLI wrapper around FastMCP stdio mode
+│   ├── server.py                     # FastMCP server factory and lifespan
+│   ├── config.py                     # Environment/path configuration
+│   ├── context.py                    # Lifespan application context
+│   ├── tools/                        # FastMCP tool surface only
+│   │   ├── _context.py               # FastMCP Context -> AppContext adapter
+│   │   ├── cadquery.py               # execute/build/export tool registration
+│   │   ├── stl.py                    # STL analysis/transform/render tool registration
+│   │   └── ai_models.py              # AI model tool registration
+│   ├── schemas/                      # Pydantic input contracts
+│   │   ├── cadquery.py
+│   │   ├── stl.py
+│   │   └── ai_models.py
+│   ├── services/                     # Stateful application services
+│   │   ├── cadquery.py               # CadQuery execution/export workflows
+│   │   ├── stl.py                    # STL tool workflows
+│   │   ├── ai_models.py              # AI model generation/version workflows
+│   │   ├── cadquery_runner.py        # CadQuery script execution core
+│   │   ├── cadquery_worker.py        # Worker process for CadQuery execution
+│   │   ├── worker_pool.py            # Worker lifecycle management
+│   │   ├── workspace_env.py          # Workspace environment setup helpers
+│   │   ├── model_store.py            # AI model version metadata store
+│   │   └── ai_generator.py           # Anthropic CadQuery generation/modification
+│   ├── domain/                       # CAD/STL pure logic
+│   │   ├── cad_export.py
+│   │   ├── geometry.py
+│   │   ├── stl_io.py
+│   │   ├── stl_analysis.py
+│   │   ├── stl_sections.py
+│   │   └── rendering.py
+│   ├── transports/                   # Optional transport adapters
+│   ├── state.py                      # Shared logging and default path names
+│   └── __init__.py
 └── tests/
     ├── test_mcp_runtime.py
     ├── test_model_store.py
@@ -60,11 +77,13 @@ The server currently registers these tools:
 - `execute_cadquery_script`
 - `build_and_export_stl`
 - `create_printable_stl`
+- `export_shape`
+- `export_shape_to_svg`
+- `get_shape_properties`
+- `get_shape_description`
 - `generate_model`
 - `modify_model`
 - `list_models`
-- `export_shape`
-- `export_shape_to_svg`
 - `analyze_cad_file`
 - `transform_stl_mesh`
 - `compare_stl_meshes`
@@ -75,8 +94,6 @@ The server currently registers these tools:
 - `validate_stl_solid`
 - `solidify_stl_mesh`
 - `probe_stl_tunnel`
-- `get_shape_properties`
-- `get_shape_description`
 
 The AI tools use `ANTHROPIC_API_KEY` and default to the Anthropic API model
 `claude-opus-4-7`. Override it with `MCP_CAD_AI_MODEL` if needed.
@@ -94,7 +111,7 @@ Save that in `.env.1password`, then run the server through `op run`. The file
 contains only a 1Password reference, not the secret value.
 
 This repo intentionally does not use a project-scoped `.mcp.json`. Register the
-server explicitly in each client. See [docs/mcp-registration.md](docs/mcp-registration.md).
+server explicitly in each client.
 
 ## Running
 
@@ -117,18 +134,18 @@ For local manual execution:
 ./mcp-cadquery-server.sh
 ```
 
+Or run the package CLI directly:
+
+```bash
+.venv-cadquery/bin/python -m mcp_cadquery_server.cli
+```
+
 The process speaks MCP over stdin/stdout.
 
 ## Client Registration
 
-Use the commands in [docs/mcp-registration.md](docs/mcp-registration.md) to
-remove older `mcp-cad` or `cadquery` registrations and re-add this launcher for:
-
-- Claude Code
-- Claude Desktop
-- Codex
-
-All clients should call the same command:
+Remove older `mcp-cad` or `cadquery` registrations from the client, then register
+this server with the shared launcher command:
 
 ```bash
 /opt/homebrew/bin/op run \
@@ -155,7 +172,7 @@ Run tests:
 Quick import check:
 
 ```bash
-.venv-cadquery/bin/python -c "import mcp_cadquery_server.handlers; print('import OK')"
+.venv-cadquery/bin/python -c "from mcp_cadquery_server.server import create_server; print(create_server().name)"
 ```
 
 ## AI Model Workflow

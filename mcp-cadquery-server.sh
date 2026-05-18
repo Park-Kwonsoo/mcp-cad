@@ -19,7 +19,7 @@ if [ -f "$STAMP_FILE" ]; then
 fi
 
 if [ "$PYPROJECT_FINGERPRINT" != "$CURRENT_FINGERPRINT" ]; then
-  if "$PYTHON_BIN" -c "import anthropic, cadquery, pydantic" >/dev/null 2>&1; then
+  if "$PYTHON_BIN" -c "import anthropic, cadquery, mcp, pydantic" >/dev/null 2>&1; then
     echo "Server dependencies already available." >&2
   else
     echo "Installing MCP CAD server package..." >&2
@@ -29,4 +29,4 @@ if [ "$PYPROJECT_FINGERPRINT" != "$CURRENT_FINGERPRINT" ]; then
 fi
 
 echo "Starting MCP CAD server over stdio..." >&2
-exec "$PYTHON_BIN" "$SCRIPT_DIR/server.py" "$@"
+exec "$PYTHON_BIN" -m mcp_cadquery_server.cli "$@"

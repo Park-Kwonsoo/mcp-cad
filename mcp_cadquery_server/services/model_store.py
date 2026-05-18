@@ -4,8 +4,6 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-
-MODELS_DIR = os.path.expanduser("~/.mcp/mcp-cad/models")
 _MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 

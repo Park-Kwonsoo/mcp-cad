@@ -14,6 +14,7 @@ classifiers = [
 dependencies = [
     "anthropic>=0.40.0",
     "cadquery==2.5.2",
+    "mcp>=1.27.1",
     "pydantic",
 ]
 

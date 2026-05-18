@@ -11,7 +11,10 @@ import sys
 import traceback
 from typing import Any, Dict
 
-from runner_core import execute_cadquery_job
+try:
+    from .cadquery_runner import execute_cadquery_job
+except ImportError:
+    from cadquery_runner import execute_cadquery_job
 
 
 logging.basicConfig(
