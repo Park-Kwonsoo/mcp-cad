@@ -7,6 +7,8 @@ PYTHON_BIN="$VENV_DIR/bin/python"
 STAMP_FILE="$VENV_DIR/.editable-install.stamp"
 PYPROJECT_FILE="$SCRIPT_DIR/pyproject.toml"
 
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+
 if [ ! -x "$PYTHON_BIN" ]; then
   echo "Creating server virtual environment at $VENV_DIR..." >&2
   uv venv "$VENV_DIR" >&2
@@ -19,7 +21,7 @@ if [ -f "$STAMP_FILE" ]; then
 fi
 
 if [ "$PYPROJECT_FINGERPRINT" != "$CURRENT_FINGERPRINT" ]; then
-  if "$PYTHON_BIN" -c "import anthropic, cadquery, mcp, pydantic" >/dev/null 2>&1; then
+  if "$PYTHON_BIN" -c "import anthropic, cadquery, mcp, pydantic, mcp_cadquery_server" >/dev/null 2>&1; then
     echo "Server dependencies already available." >&2
   else
     echo "Installing MCP CAD server package..." >&2
