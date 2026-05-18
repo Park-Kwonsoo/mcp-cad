@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from .state import _PROJECT_ROOT, log
+from .state import _MODULE_DIR, log
 
 
 DEFAULT_JOB_TIMEOUT_SECONDS = float(os.environ.get("MCP_CADQUERY_WORKER_TIMEOUT", "300"))
@@ -45,8 +45,6 @@ class CadQueryWorkerProcess:
         if self.is_alive():
             return
 
-        env = os.environ.copy()
-        env["COVERAGE_RUN_SUBPROCESS"] = "1"
         self.process = subprocess.Popen(
             [self.python_exe, self.worker_path],
             stdin=subprocess.PIPE,
@@ -55,7 +53,7 @@ class CadQueryWorkerProcess:
             text=True,
             encoding="utf-8",
             cwd=self.workspace_path,
-            env=env,
+            env=os.environ.copy(),
             bufsize=1,
         )
         self._responses = queue.Queue()
@@ -185,7 +183,7 @@ class CadQueryWorkerPool:
         worker_path: Optional[str] = None,
     ):
         self.max_workers_per_workspace = max(1, max_workers_per_workspace)
-        self.worker_path = worker_path or os.path.join(_PROJECT_ROOT, "src", "mcp_cadquery_server", "cadquery_worker.py")
+        self.worker_path = worker_path or os.path.join(_MODULE_DIR, "cadquery_worker.py")
         self._groups: Dict[Tuple[str, str], _WorkspaceWorkerGroup] = {}
         self._lock = threading.Lock()
 

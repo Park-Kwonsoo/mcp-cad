@@ -1,9 +1,8 @@
 from typing import Dict, Any, Optional
 
 # Import necessary components from other modules
-from .state import log # Import log from state
-from .handlers import tool_handlers # Import tool_handlers from handlers
-# Removed import from server to break circular dependency
+from .state import log
+from .handlers import tool_handlers
 
 
 def _schema_for(model_class: Any) -> Dict[str, Any]:
@@ -17,7 +16,7 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
     """
     Generates input schemas for each tool based on Pydantic models.
     """
-    from src.mcp_cadquery_server.models import (
+    from .models import (
         ExecuteCadqueryScriptArgs,
         BuildAndExportStlArgs,
         ExportShapeArgs,
@@ -32,10 +31,6 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
         ValidateStlSolidArgs,
         SolidifyStlMeshArgs,
         ProbeStlTunnelArgs,
-        ScanPartLibraryArgs,
-        SaveWorkspaceModuleArgs,
-        InstallWorkspacePackageArgs,
-        SearchPartsArgs,
         GetShapePropertiesArgs,
         GetShapeDescriptionArgs,
     )
@@ -56,17 +51,11 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
         "validate_stl_solid": _schema_for(ValidateStlSolidArgs),
         "solidify_stl_mesh": _schema_for(SolidifyStlMeshArgs),
         "probe_stl_tunnel": _schema_for(ProbeStlTunnelArgs),
-        "scan_part_library": _schema_for(ScanPartLibraryArgs),
-        "save_workspace_module": _schema_for(SaveWorkspaceModuleArgs),
-        "install_workspace_package": _schema_for(InstallWorkspacePackageArgs),
-        "search_parts": _schema_for(SearchPartsArgs),
         "get_shape_properties": _schema_for(GetShapePropertiesArgs),
         "get_shape_description": _schema_for(GetShapeDescriptionArgs),
-        "launch_cq_editor": {"type": "object", "properties": {}, "required": []},
     }
 
-    # Ensure all handlers have a schema entry (even if empty)
-    # tool_handlers is imported directly now
+    # Ensure all handlers have a schema entry.
     for tool_name in tool_handlers:
         if tool_name not in schemas:
             log.warning(f"No schema defined for tool: {tool_name}. Adding empty schema.")
@@ -75,9 +64,6 @@ def get_tool_schemas() -> Dict[str, Dict[str, Any]]:
 
 def get_server_info() -> dict:
     """Constructs the server_info message."""
-    # from server import get_tool_schemas # Moved to top-level of this file
-    # from .handlers import tool_handlers # Moved to top-level of this file
-
     server_name = "mcp-cadquery-server"  # TODO: Make configurable?
     server_version = "0.2.0-workspace"  # TODO: Get version dynamically?
     tool_schemas = get_tool_schemas() # Call local function
@@ -105,8 +91,8 @@ def get_server_info() -> dict:
 
 def process_tool_request(request: dict) -> Optional[dict]:
     """
-    Processes a tool request synchronously and returns the message dictionary
-    to be sent back (either via SSE or stdio). Returns None if no message should be sent.
+    Processes a tool request synchronously and returns the stdio response payload.
+    Returns None if no message should be sent.
     """
     request_id = request.get("request_id", "unknown")
     tool_name = request.get("tool_name")

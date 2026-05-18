@@ -2,24 +2,19 @@
 
 import os
 import uuid
-import subprocess
 import ast
 from typing import Any
 
 import cadquery as cq
 
-from src.mcp_cadquery_server.env_setup import (
+from .env_setup import (
     prepare_workspace_env,
     get_workspace_results_dir,
-    _run_command_helper,
     workspace_env_signature_cache,
-    workspace_reqs_mtime_cache,
 )
-from src.mcp_cadquery_server.core import (
-    execute_cqgi_script,
+from .core import (
     export_shape_to_file,
     export_shape_to_svg_file,
-    parse_docstring_metadata,
     get_shape_properties as core_get_shape_properties,
     get_shape_description as core_get_shape_description,
     analyze_cad_file as core_analyze_cad_file,
@@ -34,7 +29,7 @@ from src.mcp_cadquery_server.core import (
     probe_stl_tunnel as core_probe_stl_tunnel,
 )
 
-from src.mcp_cadquery_server.models import (
+from .models import (
     ExecuteCadqueryScriptArgs,
     BuildAndExportStlArgs,
     AnalyzeCadFileArgs,
@@ -48,15 +43,11 @@ from src.mcp_cadquery_server.models import (
     SolidifyStlMeshArgs,
     ProbeStlTunnelArgs,
 )
-from src.mcp_cadquery_server.worker_pool import cadquery_worker_pool
+from .worker_pool import cadquery_worker_pool
 
-from . import state
-# Import shared state and config
 from .state import (
     log,
     shape_results,
-    part_index,
-    DEFAULT_PART_LIBRARY_DIR,
     DEFAULT_OUTPUT_DIR_NAME,
     DEFAULT_RENDER_DIR_NAME,
 )
@@ -668,20 +659,6 @@ def handle_export_shape_to_svg(request: dict) -> dict:
              log.warning(f"Appended .svg to filename. New base filename: {base_filename}")
 
         output_path = os.path.join(render_dir_path, base_filename)
-        # Generate a relative URL if static serving is enabled, otherwise just return path
-        output_url_or_path = output_path # Default to path
-        if state.ACTIVE_STATIC_DIR: # Check if static serving is active
-            # Construct URL relative to static dir root
-            try:
-                rel_path = os.path.relpath(output_path, state.ACTIVE_STATIC_DIR)
-                if not rel_path.startswith(".."): # Ensure it's within static dir
-                    output_url_or_path = "/" + rel_path.replace(os.sep, "/")
-                    log.info(f"Generated relative URL for SVG: {output_url_or_path}")
-                else:
-                    log.warning(f"SVG output path '{output_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
-            except ValueError: # Handle case where paths are on different drives (Windows)
-                 log.warning(f"Could not determine relative path for SVG from '{output_path}' to '{state.ACTIVE_STATIC_DIR}'. Returning absolute path.")
-
 
         # Default SVG options (can be overridden)
         svg_opts = {"width": 400, "height": 300, "marginLeft": 10, "marginTop": 10, "showAxes": False, "projectionDir": (0.5, 0.5, 0.5), "strokeWidth": 0.25, "strokeColor": (0, 0, 0), "hiddenColor": (0, 0, 255, 100), "showHidden": False}
@@ -690,321 +667,8 @@ def handle_export_shape_to_svg(request: dict) -> dict:
         # Call core SVG export function
         export_shape_to_svg_file(shape_to_render, output_path, svg_opts)
 
-        return {"success": True, "message": f"Shape successfully exported to SVG: {output_url_or_path}.", "filename": output_url_or_path}
+        return {"success": True, "message": f"Shape successfully exported to SVG: {output_path}.", "filename": output_path}
     except Exception as e: error_msg = f"Error during SVG export handling: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-def handle_scan_part_library(request: dict) -> dict:
-    """
-    Handles the 'scan_part_library' tool request.
-    Scans a specified directory (or the default) for CadQuery part scripts (.py),
-    executes them to get metadata and generate previews, and updates the part_index.
-    Uses the ACTIVE configured paths for library and previews.
-    """
-    request_id = request.get("request_id", "unknown")
-    log.info(f"Handling scan_part_library request (ID: {request_id})")
-    try:
-        args = request.get("arguments", {})
-        # Use ACTIVE_PART_LIBRARY_DIR if workspace_path not provided
-        workspace_path_arg = args.get("workspace_path", state.ACTIVE_PART_LIBRARY_DIR)
-        if not workspace_path_arg:
-            raise ValueError("Missing 'workspace_path' argument and no default library path configured.")
-
-        library_path = os.path.abspath(workspace_path_arg)
-        workspace_part_library_path = os.path.join(library_path, DEFAULT_PART_LIBRARY_DIR)
-        if (
-            os.path.isdir(workspace_part_library_path)
-            and not any(name.endswith(".py") and not name.startswith("_") for name in os.listdir(library_path))
-        ):
-            library_path = workspace_part_library_path
-        # Use ACTIVE_PART_PREVIEW_DIR_PATH for previews
-        preview_dir_path = state.ACTIVE_PART_PREVIEW_DIR_PATH
-        if not preview_dir_path:
-             raise ValueError("Part preview directory path is not configured.")
-
-        # Determine preview URL base if static serving is active
-        preview_dir_url_base = None
-        if state.ACTIVE_STATIC_DIR:
-            try:
-                rel_path = os.path.relpath(preview_dir_path, state.ACTIVE_STATIC_DIR)
-                if not rel_path.startswith(".."):
-                    preview_dir_url_base = "/" + rel_path.replace(os.sep, "/")
-                    log.info(f"Using preview URL base: {preview_dir_url_base}")
-                else:
-                    log.warning(f"Preview directory '{preview_dir_path}' is outside static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
-            except ValueError:
-                 log.warning(f"Could not determine relative path for preview dir '{preview_dir_path}' to static dir '{state.ACTIVE_STATIC_DIR}'. Previews may not be accessible via URL.")
-
-
-        if not os.path.isdir(library_path):
-            raise ValueError(f"Part library directory not found: {library_path}")
-        if not os.path.isdir(preview_dir_path):
-             log.warning(f"Preview directory '{preview_dir_path}' not found. Creating it.")
-             os.makedirs(preview_dir_path, exist_ok=True)
-
-        scanned_count, indexed_count, updated_count, cached_count, error_count = 0, 0, 0, 0, 0
-        found_parts = set()
-        default_svg_opts = {"width": 150, "height": 100, "showAxes": False}
-
-        # Ensure the library path itself exists before listing directory
-        if not os.path.isdir(library_path):
-            log.warning(f"Part library directory '{library_path}' does not exist. Scan aborted.")
-            return {"success": True, "message": f"Part library directory '{library_path}' not found.", "scanned": 0, "indexed": 0, "updated": 0, "cached": 0, "removed": 0, "errors": 0}
-
-
-        for filename in os.listdir(library_path):
-            if filename.endswith(".py") and not filename.startswith("_"):
-                scanned_count += 1
-                part_name = os.path.splitext(filename)[0]
-                found_parts.add(part_name)
-                file_path = os.path.join(library_path, filename)
-                error_msg = None
-                try:
-                    current_mtime = os.path.getmtime(file_path)
-                    cached_data = part_index.get(part_name)
-                    if cached_data and cached_data.get('mtime') == current_mtime:
-                        log.debug(f"Using cached data for part: {filename}")
-                        cached_count += 1
-                        continue
-
-                    log.info(f"Processing part: {filename} (new or modified)")
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        script_content = f.read()
-
-                    # Execute in the *current* server environment, assuming parts don't need isolated envs
-                    # If isolation is needed, this would need to use script_runner via subprocess
-                    build_result = execute_cqgi_script(script_content) # Using core function directly
-
-                    if build_result.success and build_result.results:
-                        shape_to_preview = build_result.results[0].shape
-                        preview_filename = f"{part_name}.svg"
-                        preview_output_path = os.path.join(preview_dir_path, preview_filename)
-
-                        # Determine preview URL
-                        preview_output_url = None
-                        if preview_dir_url_base:
-                            preview_output_url = f"{preview_dir_url_base}/{preview_filename}"
-                        else:
-                            preview_output_url = preview_output_path # Fallback to path if no URL base
-
-                        export_shape_to_svg_file(shape_to_preview, preview_output_path, default_svg_opts)
-
-                        # Parse metadata from docstring
-                        tree = ast.parse(script_content)
-                        docstring = ast.get_docstring(tree)
-                        metadata = parse_docstring_metadata(docstring)
-                        metadata['filename'] = filename # Add filename to metadata
-
-                        part_data = {
-                            "part_id": part_name,
-                            "metadata": metadata,
-                            "preview_url": preview_output_url, # Use URL or path
-                            "script_path": file_path,
-                            "mtime": current_mtime
-                        }
-                        if part_name in part_index: updated_count += 1
-                        else: indexed_count += 1
-                        part_index[part_name] = part_data
-                        log.info(f"Successfully indexed/updated part: {part_name}")
-                    elif not build_result.results:
-                        log.warning(f"Part script {filename} executed successfully but produced no results. Skipping indexing.")
-                        error_count += 1
-                    else: # Build failed
-                        log.error(f"Failed to execute part script {filename}: {build_result.exception}")
-                        error_count += 1
-
-                except SyntaxError as e: error_msg = f"Syntax error parsing {filename}: {e}"; error_count += 1
-                except Exception as e: error_msg = f"Error processing {filename}: {e}"; error_count += 1
-                if error_msg: log.error(error_msg, exc_info=True)
-
-        # Remove parts from index that are no longer found
-        removed_count = 0
-        indexed_parts = set(part_index.keys())
-        parts_to_remove = indexed_parts - found_parts
-        for part_name_to_remove in parts_to_remove:
-            log.info(f"Removing deleted part from index: {part_name_to_remove}")
-            removed_data = part_index.pop(part_name_to_remove, None)
-            # Attempt to remove the preview file
-            if removed_data and 'preview_url' in removed_data:
-                 # Try to reconstruct the path from URL or use path directly
-                 preview_path_to_remove = None
-                 if preview_dir_url_base and removed_data['preview_url'].startswith(preview_dir_url_base):
-                      preview_filename = os.path.basename(removed_data['preview_url'])
-                      preview_path_to_remove = os.path.join(preview_dir_path, preview_filename)
-                 elif os.path.exists(removed_data['preview_url']): # Check if it's a path
-                      preview_path_to_remove = removed_data['preview_url']
-
-                 if preview_path_to_remove and os.path.exists(preview_path_to_remove):
-                     try:
-                         os.remove(preview_path_to_remove)
-                         log.info(f"Removed preview file: {preview_path_to_remove}")
-                     except OSError as e:
-                         log.error(f"Error removing preview file {preview_path_to_remove}: {e}")
-            removed_count += 1
-
-        summary_msg = (f"Scan complete. Scanned: {scanned_count}, Newly Indexed: {indexed_count}, "
-                       f"Updated: {updated_count}, Cached: {cached_count}, Removed: {removed_count}, Errors: {error_count}.")
-        log.info(summary_msg)
-        return { "success": True, "message": summary_msg, "scanned": scanned_count, "indexed": indexed_count, "updated": updated_count, "cached": cached_count, "removed": removed_count, "errors": error_count }
-    except Exception as e: error_msg = f"Error during part library scan: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-
-def handle_save_workspace_module(request: dict) -> dict:
-    """Handles saving Python module content to a workspace."""
-    request_id = request.get("request_id", "unknown")
-    log.info(f"Handling save_workspace_module request (ID: {request_id})")
-    try:
-        args = request.get("arguments", {})
-        workspace_path_arg = args.get("workspace_path")
-        module_filename = args.get("module_filename")
-        module_content = args.get("module_content")
-
-        if not workspace_path_arg: raise ValueError("Missing 'workspace_path' argument.")
-        if not module_filename: raise ValueError("Missing 'module_filename' argument.")
-        if module_content is None: raise ValueError("Missing 'module_content' argument.") # Allow empty string
-        if not module_filename.endswith(".py"): raise ValueError("'module_filename' must end with .py")
-        if os.path.sep in module_filename or (os.altsep and os.altsep in module_filename):
-             raise ValueError("'module_filename' cannot contain path separators.")
-
-        workspace_path = os.path.abspath(workspace_path_arg)
-        if not os.path.isdir(workspace_path): raise ValueError(f"Invalid workspace path: {workspace_path}")
-
-        # Define the 'modules' subdirectory within the workspace
-        modules_dir = os.path.join(workspace_path, "modules")
-        os.makedirs(modules_dir, exist_ok=True)
-
-        # Prevent writing outside the modules directory
-        target_path = os.path.abspath(os.path.join(modules_dir, module_filename))
-        if not target_path.startswith(os.path.abspath(modules_dir)):
-             raise ValueError("Invalid module filename, attempted path traversal.")
-
-        log.info(f"Saving module content to: {target_path}")
-        with open(target_path, 'w', encoding='utf-8') as f:
-            f.write(module_content)
-
-        cadquery_worker_pool.close_workspace(workspace_path)
-
-        return {"success": True, "message": f"Module saved successfully to {target_path}.", "filename": target_path}
-    except Exception as e: error_msg = f"Error saving workspace module: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-def handle_install_workspace_package(request: dict) -> dict:
-    """Handles installing a package into a workspace environment using uv."""
-    request_id = request.get("request_id", "unknown")
-    log.info(f"Handling install_workspace_package request (ID: {request_id})")
-    try:
-        args = request.get("arguments", {})
-        workspace_path_arg = args.get("workspace_path")
-        package_name = args.get("package_name")
-
-        if not workspace_path_arg: raise ValueError("Missing 'workspace_path' argument.")
-        if not package_name: raise ValueError("Missing 'package_name' argument.")
-
-        workspace_path = os.path.abspath(workspace_path_arg)
-        log_prefix = f"InstallPkg({os.path.basename(workspace_path)})"
-        log.info(f"[{log_prefix}] Request to install '{package_name}' into workspace: {workspace_path}")
-
-        # Ensure the environment exists first (prepare_workspace_env handles creation/update)
-        workspace_python_exe = prepare_workspace_env(workspace_path)
-
-        # Construct the uv install command
-        # Use the specific python from the workspace venv to ensure install goes there
-        install_cmd = [
-            "uv", "pip", "install", package_name,
-            "--python", workspace_python_exe
-        ]
-
-        log.info(f"[{log_prefix}] Running install command: {' '.join(install_cmd)}")
-        # Run the command using the helper, capturing output
-        process = _run_command_helper(install_cmd, log_prefix=log_prefix, cwd=workspace_path) # Run in workspace CWD
-
-        log.info(f"[{log_prefix}] Successfully installed '{package_name}'.")
-        reqs_file = os.path.join(workspace_path, "requirements.txt")
-        if os.path.exists(reqs_file):
-            workspace_reqs_mtime_cache[workspace_path] = os.path.getmtime(reqs_file)
-        workspace_env_signature_cache.pop(workspace_path, None)
-        cadquery_worker_pool.close_workspace(workspace_path)
-        output = "\n".join(part for part in [process.stdout, process.stderr] if part)
-        return {"success": True, "message": f"Package '{package_name}' installed successfully.", "output": output}
-
-    except Exception as e: error_msg = f"Error installing workspace package: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-
-def handle_search_parts(request: dict) -> dict:
-    """Handles searching the indexed part library."""
-    request_id = request.get("request_id", "unknown")
-    log.info(f"Handling search_parts request (ID: {request_id})")
-    try:
-        args = request.get("arguments", {})
-        query = args.get("query", "").strip().lower()
-
-        if not query:
-            log.info("Empty search query, returning all indexed parts.")
-            results = list(part_index.values())
-            return {"success": True, "message": f"Found {len(results)} parts.", "results": results}
-
-        log.info(f"Searching parts with query: '{query}'")
-        search_terms = set(term.strip() for term in query.split() if term.strip())
-        results = []
-        for part_id, part_data in part_index.items():
-            match_score = 0
-            metadata = part_data.get("metadata", {})
-
-            # Score based on matches in different fields
-            if query in part_id.lower(): match_score += 5
-            if query in metadata.get("part", "").lower(): match_score += 3 # Check 'part' field if exists
-            if query in metadata.get("description", "").lower(): match_score += 2
-            tags = metadata.get("tags", [])
-            if isinstance(tags, list):
-                 if any(term in tag for term in search_terms for tag in tags): match_score += 5
-            if query in metadata.get("filename", "").lower(): match_score += 1
-
-            if match_score > 0:
-                results.append({"score": match_score, "part": part_data})
-
-        # Sort results by score (descending)
-        results.sort(key=lambda x: x["score"], reverse=True)
-        final_results = [item["part"] for item in results]
-
-        message = f"Found {len(final_results)} parts matching query '{query}'."
-        log.info(message)
-        return {"success": True, "message": message, "results": final_results}
-    except Exception as e: error_msg = f"Error during part search: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-def handle_launch_cq_editor(request: dict) -> dict:
-    """
-    Handles launching the standalone CQ-Editor application.
-    Assumes CQ-Editor is installed and accessible in the system PATH.
-    """
-    request_id = request.get("request_id", "unknown")
-    log.info(f"Handling launch_cq_editor request (ID: {request_id})")
-    try:
-        # Command to launch CQ-Editor (adjust if needed based on installation)
-        # Common commands: 'cq-editor', 'cqeditor'
-        cq_editor_command = "cq-editor"
-        log.info(f"Attempting to launch CQ-Editor using command: '{cq_editor_command}'")
-
-        # Use subprocess.Popen for non-blocking launch
-        process = subprocess.Popen([cq_editor_command], stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-
-        # Small delay to check if process started immediately (optional)
-        try:
-            process.wait(timeout=0.1)
-            # If wait() returns quickly, it likely failed to launch
-            stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
-            log.error(f"CQ-Editor command '{cq_editor_command}' exited immediately. Error: {stderr_output}")
-            raise RuntimeError(f"Failed to launch CQ-Editor. Command exited immediately. Is it installed and in PATH? Error: {stderr_output}")
-        except subprocess.TimeoutExpired:
-            # Process is running, launch successful
-            log.info(f"CQ-Editor launched successfully in background (PID: {process.pid}).")
-            return {"success": True, "message": "CQ-Editor launched successfully."}
-        except FileNotFoundError:
-             log.error(f"CQ-Editor command '{cq_editor_command}' not found. Is CQ-Editor installed and in the system PATH?")
-             raise FileNotFoundError(f"Command '{cq_editor_command}' not found. Ensure CQ-Editor is installed and in PATH.")
-        except Exception as e:
-             log.error(f"Error launching CQ-Editor: {e}", exc_info=True)
-             raise Exception(f"An unexpected error occurred while launching CQ-Editor: {e}")
-
-    except Exception as e: error_msg = f"Error launching CQ-Editor: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
 
 def handle_get_shape_properties(request: dict) -> dict:
     """
@@ -1117,11 +781,6 @@ tool_handlers = {
     "validate_stl_solid": handle_validate_stl_solid,
     "solidify_stl_mesh": handle_solidify_stl_mesh,
     "probe_stl_tunnel": handle_probe_stl_tunnel,
-    "scan_part_library": handle_scan_part_library,
-    "search_parts": handle_search_parts,
-    "launch_cq_editor": handle_launch_cq_editor,
     "get_shape_properties": handle_get_shape_properties,
     "get_shape_description": handle_get_shape_description,
-    "save_workspace_module": handle_save_workspace_module,
-    "install_workspace_package": handle_install_workspace_package,
 }

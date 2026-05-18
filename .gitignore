@@ -26,27 +26,11 @@ env/
 env.bak/
 venv.bak/
 
-# Node / Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/dist-ssr/
-frontend/.env*.local
-frontend/.env.*.local
-frontend/.env
-frontend/coverage/
-frontend/.DS_Store
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-.yarn-integrity
-
-# Render output (if we keep it separate)
+# Runtime/output artifacts
+workspace/
+shapes/
 renders/
-frontend/dist/renders/
 test_output/
-test_static_temp_export/
-test_renders_temp/
 
 # IDE / Editor specific
 .vscode/
