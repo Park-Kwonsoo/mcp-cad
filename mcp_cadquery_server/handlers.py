@@ -1,4 +1,4 @@
-# This module contains all tool handler functions and the tool_handlers dict
+# This module contains tool handler implementations behind the FastMCP tool wrappers.
 
 import os
 import uuid
@@ -952,29 +952,3 @@ def handle_get_shape_description(request: dict) -> dict:
         return {"success": True, "message": "Shape description generated successfully.", "description": description}
 
     except Exception as e: error_msg = f"Error getting shape description: {e}"; log.error(error_msg, exc_info=True); raise Exception(error_msg)
-
-
-# --- Tool Handler Dictionary ---
-# Maps tool names to their implementation functions
-tool_handlers = {
-    "execute_cadquery_script": handle_execute_cadquery_script,
-    "build_and_export_stl": handle_build_and_export_stl,
-    "create_printable_stl": handle_create_printable_stl,
-    "generate_model": handle_generate_model,
-    "modify_model": handle_modify_model,
-    "list_models": handle_list_models,
-    "export_shape": handle_export_shape,
-    "export_shape_to_svg": handle_export_shape_to_svg,
-    "analyze_cad_file": handle_analyze_cad_file,
-    "transform_stl_mesh": handle_transform_stl_mesh,
-    "compare_stl_meshes": handle_compare_stl_meshes,
-    "inspect_stl_sections": handle_inspect_stl_sections,
-    "inspect_stl_plane_sections": handle_inspect_stl_plane_sections,
-    "detect_mount_features": handle_detect_mount_features,
-    "render_stl_preview": handle_render_stl_preview,
-    "validate_stl_solid": handle_validate_stl_solid,
-    "solidify_stl_mesh": handle_solidify_stl_mesh,
-    "probe_stl_tunnel": handle_probe_stl_tunnel,
-    "get_shape_properties": handle_get_shape_properties,
-    "get_shape_description": handle_get_shape_description,
-}

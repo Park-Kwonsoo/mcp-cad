@@ -1,8 +1,7 @@
-import asyncio
 import sys
 from typing import Sequence
 
-from .stdio_server import run_stdio_mode
+from .server import run_stdio
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -18,4 +17,4 @@ def main(argv: Sequence[str] | None = None) -> None:
             return
         raise SystemExit(f"unsupported arguments: {' '.join(args)}")
 
-    asyncio.run(run_stdio_mode())
+    run_stdio()

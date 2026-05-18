@@ -4,13 +4,13 @@ import os
 from typing import Dict, Any
 
 # --- Logging Setup (Application Level) ---
-# Configure logging early
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stderr,
-    force=True # Force re-configuration if already configured elsewhere
-)
+# Avoid forcefully reconfiguring host/client logging on import.
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        stream=sys.stderr,
+    )
 log = logging.getLogger("mcp_cadquery_server") # Use a consistent logger name
 
 # --- Global State ---
