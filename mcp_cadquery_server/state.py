@@ -1,7 +1,6 @@
 import logging
 import sys
 import os
-from typing import Dict, Any
 
 # --- Logging Setup (Application Level) ---
 # Avoid forcefully reconfiguring host/client logging on import.
@@ -12,9 +11,6 @@ if not logging.getLogger().handlers:
         stream=sys.stderr,
     )
 log = logging.getLogger("mcp_cadquery_server") # Use a consistent logger name
-
-# --- Global State ---
-shape_results: Dict[str, Dict[str, Any]] = {}
 
 # --- Global Path Configuration (Defaults & Placeholders) ---
 

@@ -52,7 +52,7 @@ def test_stdio_mcp_client_initialize_and_tools_list():
         env.setdefault("ANTHROPIC_API_KEY", "test-key")
         server = StdioServerParameters(
             command=sys.executable,
-            args=[str(Path(__file__).resolve().parents[1] / "server.py")],
+            args=["-m", "mcp_cadquery_server.cli"],
             env=env,
             cwd=Path(__file__).resolve().parents[1],
         )

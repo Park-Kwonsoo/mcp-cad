@@ -9,7 +9,6 @@ artifacts.
 
 ```text
 .
-├── server.py                         # Python entrypoint for stdio MCP
 ├── mcp-cadquery-server.sh            # Launcher used by MCP clients
 ├── pyproject.toml                    # Package metadata and dependencies
 ├── mcp_cadquery_server/
@@ -18,6 +17,7 @@ artifacts.
 │   ├── config.py                     # Environment/path configuration
 │   ├── context.py                    # Lifespan application context
 │   ├── tools/                        # FastMCP tool surface only
+│   │   ├── _context.py               # FastMCP Context -> AppContext adapter
 │   │   ├── cadquery.py               # execute/build/export tool registration
 │   │   ├── stl.py                    # STL analysis/transform/render tool registration
 │   │   └── ai_models.py              # AI model tool registration
@@ -35,7 +35,7 @@ artifacts.
 │   │   ├── workspace_env.py          # Workspace environment setup helpers
 │   │   ├── model_store.py            # AI model version metadata store
 │   │   └── ai_generator.py           # Anthropic CadQuery generation/modification
-│   ├── domain/                       # CAD/STL pure logic and facades
+│   ├── domain/                       # CAD/STL pure logic
 │   │   ├── cad_export.py
 │   │   ├── geometry.py
 │   │   ├── stl_io.py
@@ -43,7 +43,7 @@ artifacts.
 │   │   ├── stl_sections.py
 │   │   └── rendering.py
 │   ├── transports/                   # Optional transport adapters
-│   ├── state.py                      # Shared logging/runtime state
+│   ├── state.py                      # Shared logging and default path names
 │   └── __init__.py
 └── tests/
     ├── test_mcp_runtime.py
@@ -132,6 +132,12 @@ For local manual execution:
 
 ```bash
 ./mcp-cadquery-server.sh
+```
+
+Or run the package CLI directly:
+
+```bash
+.venv-cadquery/bin/python -m mcp_cadquery_server.cli
 ```
 
 The process speaks MCP over stdin/stdout.

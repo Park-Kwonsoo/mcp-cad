@@ -29,4 +29,4 @@ if [ "$PYPROJECT_FINGERPRINT" != "$CURRENT_FINGERPRINT" ]; then
 fi
 
 echo "Starting MCP CAD server over stdio..." >&2
-exec "$PYTHON_BIN" "$SCRIPT_DIR/server.py" "$@"
+exec "$PYTHON_BIN" -m mcp_cadquery_server.cli "$@"

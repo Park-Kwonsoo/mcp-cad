@@ -4,21 +4,19 @@ import os
 import uuid
 from typing import Callable
 
+from ..context import AppContext
 from ..schemas.ai_models import GenerateModelArgs, ListModelsArgs, ModifyModelArgs
+from ..schemas.cadquery import ExecuteCadqueryScriptArgs, ExportShapeArgs
 from ..state import log
 from .ai_generator import generate_cadquery_code, modify_cadquery_code
 from .cadquery import _ensure_exportable_script, handle_execute_cadquery_script, handle_export_shape
 from .model_store import (
-    MODELS_DIR,
     list_models as store_list_models,
     load_latest_code,
     load_model,
     save_model,
     validate_model_id,
 )
-
-
-AI_WORKSPACE_DIR = os.path.expanduser("~/.mcp/mcp-cad/workspace")
 
 
 def _first_execution_summary(execution_result: dict, shape_index: int) -> dict:
@@ -35,42 +33,43 @@ def _first_execution_summary(execution_result: dict, shape_index: int) -> dict:
 
 
 def _execute_and_export_generated_model(
+    app_context: AppContext,
     request_id: str,
     model_id: str,
     code: str,
     shape_index: int = 0,
 ) -> tuple[str, dict, dict]:
-    os.makedirs(AI_WORKSPACE_DIR, exist_ok=True)
+    ai_workspace_dir = app_context.config.ai_workspace_dir
+    os.makedirs(ai_workspace_dir, exist_ok=True)
     execution_result = handle_execute_cadquery_script(
-        {
-            "request_id": request_id,
-            "arguments": {
-                "workspace_path": AI_WORKSPACE_DIR,
-                "script": _ensure_exportable_script(code),
-                "parameters": None,
-            },
-        }
+        app_context,
+        ExecuteCadqueryScriptArgs(
+            workspace_path=ai_workspace_dir,
+            script=_ensure_exportable_script(code),
+            parameters=None,
+        ),
+        request_id=request_id,
     )
 
     summary = _first_execution_summary(execution_result, shape_index)
     export_result = handle_export_shape(
-        {
-            "request_id": request_id,
-            "arguments": {
-                "workspace_path": AI_WORKSPACE_DIR,
-                "result_id": summary["result_id"],
-                "shape_index": shape_index,
-                "filename": f"{model_id}.stl",
-                "format": "STL",
-                "options": {},
-            },
-        }
+        app_context,
+        ExportShapeArgs(
+            workspace_path=ai_workspace_dir,
+            result_id=summary["result_id"],
+            shape_index=shape_index,
+            filename=f"{model_id}.stl",
+            format="STL",
+            options={},
+        ),
+        request_id=request_id,
     )
 
     return export_result["filename"], execution_result, export_result
 
 
 def _run_generation_attempts(
+    app_context: AppContext,
     model_id: str,
     initial_code_fn: Callable[[], str],
     repair_instruction_fn: Callable[[str], str],
@@ -84,9 +83,14 @@ def _run_generation_attempts(
             if code is None:
                 code = initial_code_fn()
             else:
-                code = modify_cadquery_code(code, repair_instruction_fn(str(last_error)))
+                code = modify_cadquery_code(
+                    code,
+                    repair_instruction_fn(str(last_error)),
+                    model=app_context.config.anthropic_model,
+                )
 
             stl_path, execution_result, export_result = _execute_and_export_generated_model(
+                app_context=app_context,
                 request_id=f"{request_id}-{attempt}",
                 model_id=model_id,
                 code=code,
@@ -98,17 +102,20 @@ def _run_generation_attempts(
     raise RuntimeError(f"3 attempts failed: {last_error}")
 
 
-def handle_generate_model(request: dict) -> dict:
+def handle_generate_model(app_context: AppContext, args: GenerateModelArgs, request_id: str) -> dict:
     """Generate a CadQuery model, export it to STL, and store version metadata."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling generate_model request (ID: {request_id})")
-    args = GenerateModelArgs(**request.get("arguments", {}))
     model_id = validate_model_id(args.model_id or str(uuid.uuid4())[:8])
 
     try:
         code, stl_path, execution_result, export_result, attempt = _run_generation_attempts(
+            app_context=app_context,
             model_id=model_id,
-            initial_code_fn=lambda: generate_cadquery_code(args.description, image_path=args.image_path),
+            initial_code_fn=lambda: generate_cadquery_code(
+                args.description,
+                image_path=args.image_path,
+                model=app_context.config.anthropic_model,
+            ),
             repair_instruction_fn=lambda error: f"Fix this CadQuery execution/export error: {error}",
             request_id=request_id,
         )
@@ -116,7 +123,7 @@ def handle_generate_model(request: dict) -> dict:
         return {"success": False, "model_id": model_id, "message": str(exc)}
 
     meta = save_model(
-        models_dir=MODELS_DIR,
+        models_dir=app_context.config.models_dir,
         model_id=model_id,
         description=args.description,
         code=code,
@@ -134,23 +141,26 @@ def handle_generate_model(request: dict) -> dict:
     }
 
 
-def handle_modify_model(request: dict) -> dict:
+def handle_modify_model(app_context: AppContext, args: ModifyModelArgs, request_id: str) -> dict:
     """Modify a stored model, export a new STL, and append a model version."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling modify_model request (ID: {request_id})")
-    args = ModifyModelArgs(**request.get("arguments", {}))
     model_id = validate_model_id(args.model_id)
 
     try:
-        existing_code = load_latest_code(MODELS_DIR, model_id)
-        existing_meta = load_model(MODELS_DIR, model_id)
+        existing_code = load_latest_code(app_context.config.models_dir, model_id)
+        existing_meta = load_model(app_context.config.models_dir, model_id)
     except FileNotFoundError:
         return {"success": False, "model_id": model_id, "message": f"model_id '{model_id}' was not found."}
 
     try:
         code, stl_path, execution_result, export_result, attempt = _run_generation_attempts(
+            app_context=app_context,
             model_id=model_id,
-            initial_code_fn=lambda: modify_cadquery_code(existing_code, args.instruction),
+            initial_code_fn=lambda: modify_cadquery_code(
+                existing_code,
+                args.instruction,
+                model=app_context.config.anthropic_model,
+            ),
             repair_instruction_fn=lambda error: f"Fix this CadQuery execution/export error: {error}",
             request_id=request_id,
         )
@@ -159,7 +169,7 @@ def handle_modify_model(request: dict) -> dict:
 
     description = f"{existing_meta.get('description', '')} -> {args.instruction}".strip()
     meta = save_model(
-        models_dir=MODELS_DIR,
+        models_dir=app_context.config.models_dir,
         model_id=model_id,
         description=description,
         code=code,
@@ -177,9 +187,7 @@ def handle_modify_model(request: dict) -> dict:
     }
 
 
-def handle_list_models(request: dict) -> dict:
+def handle_list_models(app_context: AppContext, args: ListModelsArgs) -> dict:
     """List stored AI-generated CadQuery models and latest STL metadata."""
-    ListModelsArgs(**request.get("arguments", {}))
-    models = store_list_models(MODELS_DIR)
+    models = store_list_models(app_context.config.models_dir)
     return {"success": True, "models": models, "count": len(models)}
-

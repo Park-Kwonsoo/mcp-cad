@@ -169,10 +169,10 @@ def _image_content(image_path: str) -> dict:
     }
 
 
-def _call_anthropic(content: str | list[dict]) -> str:
+def _call_anthropic(content: str | list[dict], model: str | None = None) -> str:
     client = anthropic.Anthropic(api_key=_get_api_key())
     response = client.messages.create(
-        model=MODEL,
+        model=model or MODEL,
         max_tokens=2048,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": content}],
@@ -181,7 +181,7 @@ def _call_anthropic(content: str | list[dict]) -> str:
     return _validate_cadquery_code(code)
 
 
-def generate_cadquery_code(description: str, image_path: str | None = None) -> str:
+def generate_cadquery_code(description: str, image_path: str | None = None, model: str | None = None) -> str:
     if image_path:
         content: str | list[dict] = [
             _image_content(image_path),
@@ -193,10 +193,10 @@ def generate_cadquery_code(description: str, image_path: str | None = None) -> s
     else:
         content = description
 
-    return _call_anthropic(content)
+    return _call_anthropic(content, model=model)
 
 
-def modify_cadquery_code(existing_code: str, instruction: str) -> str:
+def modify_cadquery_code(existing_code: str, instruction: str, model: str | None = None) -> str:
     prompt = f"""Here is the current CadQuery code:
 
 ```python
@@ -207,4 +207,4 @@ Modification request: {instruction}
 
 Update the code to satisfy the request. Preserve the existing structure where practical and return only executable CadQuery Python code."""
 
-    return _call_anthropic(prompt)
+    return _call_anthropic(prompt, model=model)

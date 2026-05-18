@@ -18,3 +18,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(f"unsupported arguments: {' '.join(args)}")
 
     run_stdio()
+
+
+if __name__ == "__main__":
+    main()

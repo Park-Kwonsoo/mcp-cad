@@ -25,12 +25,10 @@ from ..schemas.stl import (
 from ..state import log
 
 
-def handle_analyze_cad_file(request: dict) -> dict:
+def handle_analyze_cad_file(args: AnalyzeCadFileArgs, request_id: str) -> dict:
     """Inspect STL/CAD files for dimensions, watertightness, topology, and shell counts."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling analyze_cad_file request (ID: {request_id})")
     try:
-        args = AnalyzeCadFileArgs(**request.get("arguments", {}))
         analysis = analyze_cad_file(args.file_path, args.file_format)
         return {
             "success": True,
@@ -43,12 +41,10 @@ def handle_analyze_cad_file(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_transform_stl_mesh(request: dict) -> dict:
+def handle_transform_stl_mesh(args: TransformStlMeshArgs, request_id: str) -> dict:
     """Resize or reposition an STL through domain mesh logic."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling transform_stl_mesh request (ID: {request_id})")
     try:
-        args = TransformStlMeshArgs(**request.get("arguments", {}))
         transform_result = transform_stl_mesh(
             file_path=args.file_path,
             output_path=args.output_path,
@@ -69,12 +65,10 @@ def handle_transform_stl_mesh(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_compare_stl_meshes(request: dict) -> dict:
+def handle_compare_stl_meshes(args: CompareStlMeshesArgs, request_id: str) -> dict:
     """Compare two STL files to verify retained, added, and removed geometry."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling compare_stl_meshes request (ID: {request_id})")
     try:
-        args = CompareStlMeshesArgs(**request.get("arguments", {}))
         comparison = compare_stl_meshes(
             source_file_path=args.source_file_path,
             target_file_path=args.target_file_path,
@@ -91,12 +85,10 @@ def handle_compare_stl_meshes(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_inspect_stl_sections(request: dict) -> dict:
+def handle_inspect_stl_sections(args: InspectStlSectionsArgs, request_id: str) -> dict:
     """Slice an STL along an axis to inspect section loops and bounds."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling inspect_stl_sections request (ID: {request_id})")
     try:
-        args = InspectStlSectionsArgs(**request.get("arguments", {}))
         section_result = inspect_stl_sections(
             file_path=args.file_path,
             axis=args.axis,
@@ -114,12 +106,10 @@ def handle_inspect_stl_sections(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_inspect_stl_plane_sections(request: dict) -> dict:
+def handle_inspect_stl_plane_sections(args: InspectStlPlaneSectionsArgs, request_id: str) -> dict:
     """Slice an STL with arbitrary or tilted planes."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling inspect_stl_plane_sections request (ID: {request_id})")
     try:
-        args = InspectStlPlaneSectionsArgs(**request.get("arguments", {}))
         section_result = inspect_stl_plane_sections(
             file_path=args.file_path,
             origin=args.origin,
@@ -141,12 +131,10 @@ def handle_inspect_stl_plane_sections(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_detect_mount_features(request: dict) -> dict:
+def handle_detect_mount_features(args: DetectMountFeaturesArgs, request_id: str) -> dict:
     """Detect mounting hole and slot candidates from STL section loops."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling detect_mount_features request (ID: {request_id})")
     try:
-        args = DetectMountFeaturesArgs(**request.get("arguments", {}))
         features = detect_mount_features(
             file_path=args.file_path,
             axis=args.axis,
@@ -166,12 +154,10 @@ def handle_detect_mount_features(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_render_stl_preview(request: dict) -> dict:
+def handle_render_stl_preview(args: RenderStlPreviewArgs, request_id: str) -> dict:
     """Render an STL visual preview as SVG."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling render_stl_preview request (ID: {request_id})")
     try:
-        args = RenderStlPreviewArgs(**request.get("arguments", {}))
         preview = render_stl_preview(
             file_path=args.file_path,
             output_path=args.output_path,
@@ -188,12 +174,10 @@ def handle_render_stl_preview(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_validate_stl_solid(request: dict) -> dict:
+def handle_validate_stl_solid(args: ValidateStlSolidArgs, request_id: str) -> dict:
     """Validate STL printability."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling validate_stl_solid request (ID: {request_id})")
     try:
-        args = ValidateStlSolidArgs(**request.get("arguments", {}))
         validation = validate_stl_solid(
             file_path=args.file_path,
             allow_multiple_components=args.allow_multiple_components,
@@ -206,12 +190,10 @@ def handle_validate_stl_solid(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_solidify_stl_mesh(request: dict) -> dict:
+def handle_solidify_stl_mesh(args: SolidifyStlMeshArgs, request_id: str) -> dict:
     """Convert a watertight STL mesh to tessellated BREP or STEP."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling solidify_stl_mesh request (ID: {request_id})")
     try:
-        args = SolidifyStlMeshArgs(**request.get("arguments", {}))
         result = solidify_stl_mesh(
             file_path=args.file_path,
             output_path=args.output_path,
@@ -231,12 +213,10 @@ def handle_solidify_stl_mesh(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_probe_stl_tunnel(request: dict) -> dict:
+def handle_probe_stl_tunnel(args: ProbeStlTunnelArgs, request_id: str) -> dict:
     """Probe an STL tunnel or cable channel."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling probe_stl_tunnel request (ID: {request_id})")
     try:
-        args = ProbeStlTunnelArgs(**request.get("arguments", {}))
         tunnel = probe_stl_tunnel(
             file_path=args.file_path,
             start=args.start,
@@ -254,4 +234,3 @@ def handle_probe_stl_tunnel(request: dict) -> dict:
         error_msg = f"Error during STL tunnel probe: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
-

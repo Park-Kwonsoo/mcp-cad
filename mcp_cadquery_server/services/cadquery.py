@@ -7,6 +7,7 @@ from typing import Any
 
 import cadquery as cq
 
+from ..context import AppContext
 from ..domain.cad_export import export_shape_to_file, export_shape_to_svg_file
 from ..domain.geometry import get_shape_description, get_shape_properties
 from ..domain.stl_analysis import analyze_cad_file
@@ -18,21 +19,8 @@ from ..schemas.cadquery import (
     GetShapeDescriptionArgs,
     GetShapePropertiesArgs,
 )
-from ..state import DEFAULT_OUTPUT_DIR_NAME, DEFAULT_RENDER_DIR_NAME, log, shape_results
-from .worker_pool import cadquery_worker_pool
+from ..state import DEFAULT_OUTPUT_DIR_NAME, DEFAULT_RENDER_DIR_NAME, log
 from .workspace_env import get_workspace_results_dir, prepare_workspace_env, workspace_env_signature_cache
-
-
-def _coerce_execute_args(args: Any, request_id: str) -> tuple[ExecuteCadqueryScriptArgs, str]:
-    """Accept direct model calls and raw MCP request dictionaries."""
-    if isinstance(args, ExecuteCadqueryScriptArgs):
-        return args, request_id
-    if isinstance(args, dict):
-        if "arguments" in args:
-            request_id = args.get("request_id", request_id)
-            return ExecuteCadqueryScriptArgs(**args.get("arguments", {})), request_id
-        return ExecuteCadqueryScriptArgs(**args), request_id
-    raise TypeError(f"Unsupported execute_cadquery_script argument type: {type(args)}")
 
 
 def _script_calls_show_object(script_content: str) -> bool:
@@ -75,7 +63,7 @@ def _ensure_exportable_script(script_content: str) -> str:
     return script_content
 
 
-def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> dict:
+def handle_execute_cadquery_script(app_context: AppContext, args: ExecuteCadqueryScriptArgs, request_id: str) -> dict:
     """
     Run CadQuery Python to create or edit a CAD model when a script is already available.
     Ensures workspace environment exists and executes the script
@@ -83,14 +71,13 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
     """
     log.info(f"Handling execute_cadquery_script request (ID: {request_id})")
     try:
-        execute_args, request_id = _coerce_execute_args(args, request_id)
-        workspace_path = os.path.abspath(execute_args.workspace_path)
-        script_content = execute_args.script
+        workspace_path = os.path.abspath(args.workspace_path)
+        script_content = args.script
 
-        if execute_args.parameter_sets is not None:
-            parameter_sets = execute_args.parameter_sets
-        elif execute_args.parameters is not None:
-            parameter_sets = [execute_args.parameters]
+        if args.parameter_sets is not None:
+            parameter_sets = args.parameter_sets
+        elif args.parameters is not None:
+            parameter_sets = [args.parameters]
         else:
             parameter_sets = [{}]
 
@@ -103,7 +90,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
         workspace_python_exe = prepare_workspace_env(workspace_path)
         current_env_signature = workspace_env_signature_cache.get(workspace_path)
         if previous_env_signature is not None and current_env_signature != previous_env_signature:
-            cadquery_worker_pool.close_workspace(workspace_path)
+            app_context.worker_pool.close_workspace(workspace_path)
 
         results_summary = []
 
@@ -113,7 +100,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
             log.info(f"[{log_prefix}] Preparing execution for parameter set {i} with params: {params}")
 
             try:
-                runner_result = cadquery_worker_pool.execute(
+                runner_result = app_context.worker_pool.execute(
                     workspace_path,
                     workspace_python_exe,
                     {
@@ -125,7 +112,7 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
                     },
                 )
 
-                shape_results[result_id] = runner_result
+                app_context.shape_results[result_id] = runner_result
 
                 results_summary.append(
                     {
@@ -150,8 +137,8 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
                         "error": f"Handler error during execution: {exec_err}",
                     }
                 )
-                if result_id in shape_results:
-                    del shape_results[result_id]
+                if result_id in app_context.shape_results:
+                    del app_context.shape_results[result_id]
 
         total_sets = len(parameter_sets)
         successful_sets = sum(1 for r in results_summary if r["success"])
@@ -167,26 +154,23 @@ def handle_execute_cadquery_script(args: Any, request_id: str = "unknown") -> di
         raise Exception(error_msg)
 
 
-def handle_build_and_export_stl(request: dict) -> dict:
+def handle_build_and_export_stl(app_context: AppContext, args: BuildAndExportStlArgs, request_id: str) -> dict:
     """
     Create a 3D-printer-ready STL through MCP/CadQuery; use real boolean union/cut solids, not STL mesh concatenation.
     """
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling build_and_export_stl request (ID: {request_id})")
     try:
-        args = BuildAndExportStlArgs(**request.get("arguments", {}))
         if args.shape_index < 0:
             raise ValueError("'shape_index' must be a non-negative integer.")
 
         execution_result = handle_execute_cadquery_script(
-            {
-                "request_id": request_id,
-                "arguments": {
-                    "workspace_path": args.workspace_path,
-                    "script": _ensure_exportable_script(args.script),
-                    "parameters": args.parameters,
-                },
-            }
+            app_context,
+            ExecuteCadqueryScriptArgs(
+                workspace_path=args.workspace_path,
+                script=_ensure_exportable_script(args.script),
+                parameters=args.parameters,
+            ),
+            request_id=request_id,
         )
 
         execution_summaries = execution_result.get("results", [])
@@ -198,17 +182,16 @@ def handle_build_and_export_stl(request: dict) -> dict:
 
         result_id = f"{request_id}_0"
         export_result = handle_export_shape(
-            {
-                "request_id": request_id,
-                "arguments": {
-                    "workspace_path": args.workspace_path,
-                    "result_id": result_id,
-                    "shape_index": args.shape_index,
-                    "filename": args.filename,
-                    "format": "STL",
-                    "options": args.export_options or {},
-                },
-            }
+            app_context,
+            ExportShapeArgs(
+                workspace_path=args.workspace_path,
+                result_id=result_id,
+                shape_index=args.shape_index,
+                filename=args.filename,
+                format="STL",
+                options=args.export_options or {},
+            ),
+            request_id=request_id,
         )
 
         analysis = None
@@ -231,13 +214,13 @@ def handle_build_and_export_stl(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_create_printable_stl(request: dict) -> dict:
+def handle_create_printable_stl(app_context: AppContext, args: BuildAndExportStlArgs, request_id: str) -> dict:
     """Use this MCP tool for make/print/output STL requests."""
-    return handle_build_and_export_stl(request)
+    return handle_build_and_export_stl(app_context, args, request_id)
 
 
-def _load_shape_from_result(result_id: str, shape_index: int) -> Any:
-    result_dict = shape_results.get(result_id)
+def _load_shape_from_result(app_context: AppContext, result_id: str, shape_index: int) -> Any:
+    result_dict = app_context.shape_results.get(result_id)
     if not result_dict:
         raise ValueError(f"Result ID '{result_id}' not found.")
     if not result_dict.get("success"):
@@ -265,21 +248,19 @@ def _load_shape_from_result(result_id: str, shape_index: int) -> Any:
         raise RuntimeError(f"Failed to import intermediate shape file: {import_err}") from import_err
 
 
-def handle_export_shape(request: dict) -> dict:
+def handle_export_shape(app_context: AppContext, args: ExportShapeArgs, request_id: str) -> dict:
     """
     Export a generated CadQuery shape to STL for 3D printing or to STEP/BREP/SVG formats.
     Resolves relative target paths based on the workspace.
     """
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling export_shape request (ID: {request_id})")
     try:
-        args = ExportShapeArgs(**request.get("arguments", {}))
         export_options = args.options or {}
         workspace_path = os.path.abspath(args.workspace_path)
         if not os.path.isdir(workspace_path):
             raise ValueError(f"Invalid workspace path: {workspace_path}")
 
-        shape_to_export = _load_shape_from_result(args.result_id, args.shape_index)
+        shape_to_export = _load_shape_from_result(app_context, args.result_id, args.shape_index)
 
         if os.path.isabs(args.filename) or os.path.sep in args.filename or (os.altsep and os.altsep in args.filename):
             output_path = os.path.abspath(args.filename)
@@ -302,18 +283,16 @@ def handle_export_shape(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_export_shape_to_svg(request: dict) -> dict:
+def handle_export_shape_to_svg(app_context: AppContext, args: ExportShapeToSvgArgs, request_id: str) -> dict:
     """Export a generated CadQuery shape to SVG in the workspace render directory."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling export_shape_to_svg request (ID: {request_id})")
     try:
-        args = ExportShapeToSvgArgs(**request.get("arguments", {}))
         export_options = args.options or {}
         workspace_path = os.path.abspath(args.workspace_path)
         if not os.path.isdir(workspace_path):
             raise ValueError(f"Invalid workspace path: {workspace_path}")
 
-        shape_to_render = _load_shape_from_result(args.result_id, args.shape_index)
+        shape_to_render = _load_shape_from_result(app_context, args.result_id, args.shape_index)
 
         render_dir_path = os.path.join(workspace_path, DEFAULT_OUTPUT_DIR_NAME, DEFAULT_RENDER_DIR_NAME)
         os.makedirs(render_dir_path, exist_ok=True)
@@ -347,13 +326,11 @@ def handle_export_shape_to_svg(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_get_shape_properties(request: dict) -> dict:
+def handle_get_shape_properties(app_context: AppContext, args: GetShapePropertiesArgs, request_id: str) -> dict:
     """Return properties for a generated CadQuery shape."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling get_shape_properties request (ID: {request_id})")
     try:
-        args = GetShapePropertiesArgs(**request.get("arguments", {}))
-        shape_object = _load_shape_from_result(args.result_id, args.shape_index)
+        shape_object = _load_shape_from_result(app_context, args.result_id, args.shape_index)
         properties = get_shape_properties(shape_object)
         log.info(f"Retrieved properties for shape {args.shape_index} from result ID '{args.result_id}'.")
         return {"success": True, "message": "Shape properties retrieved successfully.", "properties": properties}
@@ -363,13 +340,11 @@ def handle_get_shape_properties(request: dict) -> dict:
         raise Exception(error_msg)
 
 
-def handle_get_shape_description(request: dict) -> dict:
+def handle_get_shape_description(app_context: AppContext, args: GetShapeDescriptionArgs, request_id: str) -> dict:
     """Return a textual description for a generated CadQuery shape."""
-    request_id = request.get("request_id", "unknown")
     log.info(f"Handling get_shape_description request (ID: {request_id})")
     try:
-        args = GetShapeDescriptionArgs(**request.get("arguments", {}))
-        shape_object = _load_shape_from_result(args.result_id, args.shape_index)
+        shape_object = _load_shape_from_result(app_context, args.result_id, args.shape_index)
         description = get_shape_description(shape_object)
         log.info(f"Generated description for shape {args.shape_index} from result ID '{args.result_id}'.")
         return {"success": True, "message": "Shape description generated successfully.", "description": description}
@@ -377,4 +352,3 @@ def handle_get_shape_description(request: dict) -> dict:
         error_msg = f"Error getting shape description: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
-

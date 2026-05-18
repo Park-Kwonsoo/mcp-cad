@@ -225,6 +225,3 @@ class CadQueryWorkerPool:
                 )
                 self._groups[key] = group
             return group
-
-
-cadquery_worker_pool = CadQueryWorkerPool()
