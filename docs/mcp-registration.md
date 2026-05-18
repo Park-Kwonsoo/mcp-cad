@@ -10,7 +10,7 @@ Use the repository launcher through `op run`:
 /opt/homebrew/bin/op run \
   --env-file /Users/kwonsoo/.mcp/mcp-cad/.env.1password \
   -- \
-  /Users/kwonsoo/.mcp/mcp-cad/server_stdio.sh
+  /Users/kwonsoo/.mcp/mcp-cad/mcp-cadquery-server.sh
 ```
 
 The `.env.1password` file should contain only the 1Password reference:
@@ -45,7 +45,7 @@ claude mcp add \
   /opt/homebrew/bin/op run \
   --env-file /Users/kwonsoo/.mcp/mcp-cad/.env.1password \
   -- \
-  /Users/kwonsoo/.mcp/mcp-cad/server_stdio.sh
+  /Users/kwonsoo/.mcp/mcp-cad/mcp-cadquery-server.sh
 ```
 
 Verify:
@@ -77,7 +77,7 @@ In `mcpServers`, remove any existing `mcp-cad` or `cadquery` entry, then add:
         "--env-file",
         "/Users/kwonsoo/.mcp/mcp-cad/.env.1password",
         "--",
-        "/Users/kwonsoo/.mcp/mcp-cad/server_stdio.sh"
+        "/Users/kwonsoo/.mcp/mcp-cad/mcp-cadquery-server.sh"
       ]
     }
   }
@@ -102,7 +102,7 @@ codex mcp add mcp-cad -- \
   /opt/homebrew/bin/op run \
   --env-file /Users/kwonsoo/.mcp/mcp-cad/.env.1password \
   -- \
-  /Users/kwonsoo/.mcp/mcp-cad/server_stdio.sh
+  /Users/kwonsoo/.mcp/mcp-cad/mcp-cadquery-server.sh
 ```
 
 Verify:
