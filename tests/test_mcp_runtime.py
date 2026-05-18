@@ -6,6 +6,27 @@ import anyio
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from mcp_cadquery_server.schemas.ai_models import GenerateModelArgs, ListModelsArgs, ModifyModelArgs
+from mcp_cadquery_server.schemas.cadquery import (
+    BuildAndExportStlArgs,
+    ExecuteCadqueryScriptArgs,
+    ExportShapeArgs,
+    ExportShapeToSvgArgs,
+    GetShapeDescriptionArgs,
+    GetShapePropertiesArgs,
+)
+from mcp_cadquery_server.schemas.stl import (
+    AnalyzeCadFileArgs,
+    CompareStlMeshesArgs,
+    DetectMountFeaturesArgs,
+    InspectStlPlaneSectionsArgs,
+    InspectStlSectionsArgs,
+    ProbeStlTunnelArgs,
+    RenderStlPreviewArgs,
+    SolidifyStlMeshArgs,
+    TransformStlMeshArgs,
+    ValidateStlSolidArgs,
+)
 from mcp_cadquery_server.server import create_server
 
 
@@ -32,6 +53,29 @@ EXPECTED_TOOLS = [
     "probe_stl_tunnel",
 ]
 
+TOOL_ARG_MODELS = {
+    "execute_cadquery_script": ExecuteCadqueryScriptArgs,
+    "build_and_export_stl": BuildAndExportStlArgs,
+    "create_printable_stl": BuildAndExportStlArgs,
+    "export_shape": ExportShapeArgs,
+    "export_shape_to_svg": ExportShapeToSvgArgs,
+    "get_shape_properties": GetShapePropertiesArgs,
+    "get_shape_description": GetShapeDescriptionArgs,
+    "generate_model": GenerateModelArgs,
+    "modify_model": ModifyModelArgs,
+    "list_models": ListModelsArgs,
+    "analyze_cad_file": AnalyzeCadFileArgs,
+    "transform_stl_mesh": TransformStlMeshArgs,
+    "compare_stl_meshes": CompareStlMeshesArgs,
+    "inspect_stl_sections": InspectStlSectionsArgs,
+    "inspect_stl_plane_sections": InspectStlPlaneSectionsArgs,
+    "detect_mount_features": DetectMountFeaturesArgs,
+    "render_stl_preview": RenderStlPreviewArgs,
+    "validate_stl_solid": ValidateStlSolidArgs,
+    "solidify_stl_mesh": SolidifyStlMeshArgs,
+    "probe_stl_tunnel": ProbeStlTunnelArgs,
+}
+
 
 def test_fastmcp_registered_tools_are_runtime_tools_only():
     async def check_tools():
@@ -44,6 +88,18 @@ def test_fastmcp_registered_tools_are_runtime_tools_only():
         assert all(tool.inputSchema for tool in tools)
 
     anyio.run(check_tools)
+
+
+def test_fastmcp_tool_signatures_match_pydantic_arg_models():
+    async def check_tool_schemas():
+        tools = await create_server().list_tools()
+        for tool in tools:
+            model = TOOL_ARG_MODELS[tool.name]
+            model_schema = model.model_json_schema()
+            assert set(tool.inputSchema.get("properties", {})) == set(model_schema.get("properties", {}))
+            assert set(tool.inputSchema.get("required", [])) == set(model_schema.get("required", []))
+
+    anyio.run(check_tool_schemas)
 
 
 def test_stdio_mcp_client_initialize_and_tools_list():
@@ -64,5 +120,31 @@ def test_stdio_mcp_client_initialize_and_tools_list():
                 tools = await session.list_tools()
                 tool_names = [tool.name for tool in tools.tools]
                 assert tool_names == EXPECTED_TOOLS
+
+    anyio.run(check_stdio_server)
+
+
+def test_stdio_initialize_does_not_create_ai_runtime_dirs(tmp_path):
+    async def check_stdio_server():
+        models_dir = tmp_path / "models"
+        workspace_dir = tmp_path / "workspace"
+        env = dict(os.environ)
+        env.setdefault("ANTHROPIC_API_KEY", "test-key")
+        env["MCP_CAD_MODELS_DIR"] = str(models_dir)
+        env["MCP_CAD_AI_WORKSPACE_DIR"] = str(workspace_dir)
+
+        server = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "mcp_cadquery_server.cli"],
+            env=env,
+            cwd=Path(__file__).resolve().parents[1],
+        )
+        async with stdio_client(server) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                await session.list_tools()
+
+        assert not models_dir.exists()
+        assert not workspace_dir.exists()
 
     anyio.run(check_stdio_server)
