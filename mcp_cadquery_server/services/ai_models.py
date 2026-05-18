@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from functools import lru_cache
+from importlib.resources import files
 from typing import Callable
 
 from ..context import AppContext
@@ -17,6 +19,44 @@ from .model_store import (
     save_model,
     validate_model_id,
 )
+
+
+@lru_cache(maxsize=None)
+def _load_prompt_sections(filename: str) -> dict[str, str]:
+    prompt_path = files("mcp_cadquery_server.tools").joinpath("prompts", filename)
+    sections: dict[str, list[str]] = {}
+    current_key: str | None = None
+
+    for line in prompt_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            current_key = line[3:].strip()
+            sections[current_key] = []
+            continue
+        if current_key is None:
+            continue
+        sections[current_key].append(line)
+
+    return {
+        key: " ".join(part.strip() for part in parts).strip()
+        for key, parts in sections.items()
+    }
+
+
+def _prompt_section(filename: str, key: str) -> str:
+    try:
+        return _load_prompt_sections(filename)[key]
+    except KeyError as exc:
+        raise RuntimeError(f"Missing prompt section {key!r} in {filename}") from exc
+
+
+def _generate_model_repair_instruction(error: str) -> str:
+    template = _prompt_section("generate_models.md", "repair_instruction_template")
+    return template.format(error=error)
+
+
+def _modify_model_repair_instruction(error: str) -> str:
+    template = _prompt_section("modify_models.md", "repair_instruction_template")
+    return template.format(error=error)
 
 
 def _first_execution_summary(execution_result: dict, shape_index: int) -> dict:
@@ -116,7 +156,7 @@ def handle_generate_model(app_context: AppContext, args: GenerateModelArgs, requ
                 image_path=args.image_path,
                 model=app_context.config.anthropic_model,
             ),
-            repair_instruction_fn=lambda error: f"Fix this CadQuery execution/export error: {error}",
+            repair_instruction_fn=_generate_model_repair_instruction,
             request_id=request_id,
         )
     except Exception as exc:
@@ -161,7 +201,7 @@ def handle_modify_model(app_context: AppContext, args: ModifyModelArgs, request_
                 args.instruction,
                 model=app_context.config.anthropic_model,
             ),
-            repair_instruction_fn=lambda error: f"Fix this CadQuery execution/export error: {error}",
+            repair_instruction_fn=_modify_model_repair_instruction,
             request_id=request_id,
         )
     except Exception as exc:
