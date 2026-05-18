@@ -38,4 +38,4 @@ test_output/
 *.swp
 *~
 
-*_workspace/
+workspace
