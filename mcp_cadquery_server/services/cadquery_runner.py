@@ -90,11 +90,6 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
         if results_dir is not None and not isinstance(results_dir, str):
             raise ValueError("'results_dir' must be a string when provided.")
 
-        modules_dir = os.path.join(workspace_path, "modules")
-        if os.path.isdir(modules_dir):
-            _ensure_import_path(modules_dir)
-        _ensure_import_path(workspace_path)
-
         # Worker stdout is reserved for JSON protocol messages. CadQuery imports,
         # CQGI build hooks, and user scripts may print warnings or diagnostics;
         # route those to stderr so callers always receive parseable JSON.
@@ -103,6 +98,12 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
             import cadquery as cq
             from cadquery import cqgi
 
+        modules_dir = os.path.join(workspace_path, "modules")
+        if os.path.isdir(modules_dir):
+            _ensure_import_path(modules_dir)
+        _ensure_import_path(workspace_path)
+
+        with contextlib.redirect_stdout(sys.stderr):
             model = cqgi.parse(script_content)
             build_result = model.build()
 
