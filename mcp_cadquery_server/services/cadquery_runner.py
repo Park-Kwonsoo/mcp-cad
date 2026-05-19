@@ -13,6 +13,23 @@ from typing import Any, Dict
 log = logging.getLogger(__name__)
 
 
+def _remove_services_dir_from_import_path() -> None:
+    """
+    The worker may be launched by file path, which puts this services directory
+    on sys.path and lets services/cadquery.py shadow the real cadquery package.
+    """
+    services_dir = os.path.realpath(os.path.dirname(__file__))
+    sys.path[:] = [
+        path
+        for path in sys.path
+        if os.path.realpath(path or os.getcwd()) != services_dir
+    ]
+    cadquery_module = sys.modules.get("cadquery")
+    cadquery_file = getattr(cadquery_module, "__file__", None)
+    if cadquery_file and os.path.realpath(cadquery_file) == os.path.join(services_dir, "cadquery.py"):
+        del sys.modules["cadquery"]
+
+
 def _ensure_import_path(path: str) -> None:
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -82,6 +99,7 @@ def execute_cadquery_job(input_data: Dict[str, Any]) -> Dict[str, Any]:
         # CQGI build hooks, and user scripts may print warnings or diagnostics;
         # route those to stderr so callers always receive parseable JSON.
         with contextlib.redirect_stdout(sys.stderr):
+            _remove_services_dir_from_import_path()
             import cadquery as cq
             from cadquery import cqgi
 
