@@ -20,6 +20,57 @@ class TransformStlMeshArgs(BaseModel):
     center_at_origin: bool = Field(False, description="Whether to move the transformed STL mesh center to the origin")
 
 
+class StlHoleCenterMove(BaseModel):
+    current_center: Dict[str, float] = Field(
+        ...,
+        description="Current measured center of the existing STL hole as {'x': ..., 'y': ..., 'z': ...}",
+    )
+    new_center: Optional[Dict[str, float]] = Field(
+        None,
+        description="Target center coordinate for the same STL hole; provide this or offset",
+    )
+    offset: Optional[Dict[str, float]] = Field(
+        None,
+        description="Optional x/y/z movement vector for the hole center; provide this or new_center",
+    )
+    radius: float = Field(
+        ...,
+        description="Measured hole radius used to select cylindrical hole-wall and rim vertices",
+    )
+    axis: str = Field("z", description="Hole axis: x, y, or z; z means the hole is vertical through XY")
+    radial_tolerance: float = Field(
+        0.25,
+        description="Selection tolerance around radius in model units; increase for chamfered or faceted STL holes",
+    )
+    axial_min: Optional[float] = Field(
+        None,
+        description="Optional minimum coordinate along the hole axis to limit vertex selection",
+    )
+    axial_max: Optional[float] = Field(
+        None,
+        description="Optional maximum coordinate along the hole axis to limit vertex selection",
+    )
+
+
+class MoveStlHoleCentersArgs(BaseModel):
+    file_path: str = Field(
+        ...,
+        description="Path to the existing STL whose hole center coordinates need direct mesh editing",
+    )
+    output_path: str = Field(
+        ...,
+        description="Path where the edited STL with moved hole center coordinates will be written",
+    )
+    holes: List[StlHoleCenterMove] = Field(
+        ...,
+        description="One or more existing STL hole moves; each needs the current measured center, target new_center or offset, hole radius, and optional axis/range limits",
+    )
+    allow_empty_selection: bool = Field(
+        False,
+        description="Allow writing an STL when a requested hole selects no vertices; keep false for coordinate-edit safety",
+    )
+
+
 class CompareStlMeshesArgs(BaseModel):
     source_file_path: str = Field(..., description="Path to the original/source STL mesh; use this MCP tool instead of ad hoc local Python STL parsing")
     target_file_path: str = Field(..., description="Path to the generated, redesigned, or transformed STL mesh to compare against the source")

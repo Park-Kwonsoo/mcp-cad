@@ -89,6 +89,7 @@ The server currently registers these tools:
 - `list_models`
 - `analyze_cad_file`
 - `transform_stl_mesh`
+- `move_stl_hole_centers` - directly move measured hole-center coordinates in an existing STL by editing matching hole-edge/rim mesh vertices
 - `compare_stl_meshes`
 - `inspect_stl_sections`
 - `inspect_stl_plane_sections`

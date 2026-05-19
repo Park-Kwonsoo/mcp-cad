@@ -26,6 +26,7 @@ from mcp_cadquery_server.schemas.stl import (
     SolidifyStlMeshArgs,
     TransformStlMeshArgs,
     ValidateStlSolidArgs,
+    MoveStlHoleCentersArgs,
 )
 from mcp_cadquery_server.server import create_server
 from mcp_cadquery_server.tools.ai_models import (
@@ -49,6 +50,7 @@ EXPECTED_TOOLS = [
     "list_models",
     "analyze_cad_file",
     "transform_stl_mesh",
+    "move_stl_hole_centers",
     "compare_stl_meshes",
     "inspect_stl_sections",
     "inspect_stl_plane_sections",
@@ -80,6 +82,7 @@ TOOL_ARG_MODELS = {
     "validate_stl_solid": ValidateStlSolidArgs,
     "solidify_stl_mesh": SolidifyStlMeshArgs,
     "probe_stl_tunnel": ProbeStlTunnelArgs,
+    "move_stl_hole_centers": MoveStlHoleCentersArgs,
 }
 
 
@@ -131,6 +134,26 @@ def test_ai_model_tool_descriptions_define_non_overlapping_scope():
             modify_model.inputSchema["properties"]["instruction"]["description"]
             == MODIFY_MODEL_INSTRUCTION_FIELD
         )
+
+    anyio.run(check_tool_descriptions)
+
+
+def test_stl_tool_descriptions_explain_when_to_call_mesh_editing_tools():
+    async def check_tool_descriptions():
+        tools = {tool.name: tool for tool in await create_server().list_tools()}
+
+        move_holes = tools["move_stl_hole_centers"]
+        assert "existing STL" in move_holes.description
+        assert "hole center" in move_holes.description
+        assert "coordinate" in move_holes.description
+        assert (
+            "current measured center"
+            in move_holes.inputSchema["properties"]["holes"]["description"]
+        )
+
+        analyze = tools["analyze_cad_file"]
+        assert "Use before editing" in analyze.description
+        assert "mounting holes" in analyze.description
 
     anyio.run(check_tool_descriptions)
 

@@ -11,6 +11,7 @@ import cadquery as cq
 from .cad_export import export_shape_to_file
 from .geometry import get_shape_description, get_shape_properties
 from .mesh_primitives import (
+    AXIS_INDICES,
     Triangle,
     Vertex,
     add,
@@ -21,6 +22,7 @@ from .mesh_primitives import (
     dot,
     finite_number,
     length,
+    normalize_axis,
     normalize_file_format,
     normalize_vector,
     read_stl_triangles,
@@ -693,4 +695,176 @@ def transform_stl_mesh(
         },
         "before": before,
         "after": after,
+    }
+
+def _rounded_vertex_key(vertex: Vertex) -> Vertex:
+    return (round(vertex[0], 8), round(vertex[1], 8), round(vertex[2], 8))
+
+def _optional_finite_number(value: Any, name: str) -> Optional[float]:
+    if value is None:
+        return None
+    return finite_number(value, name)
+
+def _normalize_hole_move(hole: Dict[str, Any], index: int) -> Dict[str, Any]:
+    if not isinstance(hole, dict):
+        raise ValueError(f"holes[{index}] must be an object.")
+
+    current_center = coerce_vector(hole.get("current_center"), f"holes[{index}].current_center")
+    has_new_center = hole.get("new_center") is not None
+    has_offset = hole.get("offset") is not None
+    if has_new_center == has_offset:
+        raise ValueError(f"holes[{index}] must provide exactly one of new_center or offset.")
+
+    if has_new_center:
+        target_center = coerce_vector(hole.get("new_center"), f"holes[{index}].new_center")
+        delta = subtract(target_center, current_center)
+    else:
+        delta = coerce_vector(hole.get("offset"), f"holes[{index}].offset")
+        target_center = add(current_center, delta)
+
+    radius = finite_number(hole.get("radius"), f"holes[{index}].radius")
+    if radius <= 0:
+        raise ValueError(f"holes[{index}].radius must be greater than zero.")
+
+    radial_tolerance = finite_number(hole.get("radial_tolerance", 0.25), f"holes[{index}].radial_tolerance")
+    if radial_tolerance < 0:
+        raise ValueError(f"holes[{index}].radial_tolerance must be non-negative.")
+
+    axis = normalize_axis(str(hole.get("axis", "z")))
+    axial_min = _optional_finite_number(hole.get("axial_min"), f"holes[{index}].axial_min")
+    axial_max = _optional_finite_number(hole.get("axial_max"), f"holes[{index}].axial_max")
+    if axial_min is not None and axial_max is not None and axial_min > axial_max:
+        raise ValueError(f"holes[{index}].axial_min must be <= axial_max.")
+
+    return {
+        "index": index,
+        "axis": axis,
+        "axis_index": AXIS_INDICES[axis],
+        "current_center": current_center,
+        "target_center": target_center,
+        "delta": delta,
+        "radius": radius,
+        "radial_tolerance": radial_tolerance,
+        "axial_min": axial_min,
+        "axial_max": axial_max,
+    }
+
+def _vertex_matches_hole_move(vertex: Vertex, spec: Dict[str, Any]) -> bool:
+    axis_index = spec["axis_index"]
+    axial_value = vertex[axis_index]
+    if spec["axial_min"] is not None and axial_value < spec["axial_min"]:
+        return False
+    if spec["axial_max"] is not None and axial_value > spec["axial_max"]:
+        return False
+
+    plane_indices = [index for index in range(3) if index != axis_index]
+    center = spec["current_center"]
+    radial_distance = math.sqrt(sum((vertex[index] - center[index]) ** 2 for index in plane_indices))
+    return abs(radial_distance - spec["radius"]) <= spec["radial_tolerance"]
+
+def move_stl_hole_centers(
+    file_path: str,
+    output_path: str,
+    holes: List[Dict[str, Any]],
+    allow_empty_selection: bool = False,
+) -> Dict[str, Any]:
+    """
+    Moves existing cylindrical STL hole centers by translating selected hole-edge vertices.
+
+    This preserves the source mesh topology instead of reconstructing a clean CAD
+    model. It is intended for measured coordinate corrections on already-exported
+    STL parts where the surrounding mesh can tolerate local vertex deformation.
+    """
+    if not holes:
+        raise ValueError("holes must contain at least one hole move.")
+
+    source_path = resolve_existing_file(file_path)
+    target_path = os.path.abspath(os.path.expanduser(output_path))
+    source_format = normalize_file_format(source_path, "stl")
+    if source_format != "stl":
+        raise ValueError("move_stl_hole_centers only supports STL input.")
+
+    specs = [_normalize_hole_move(hole, index) for index, hole in enumerate(holes)]
+    triangles, stl_encoding = read_stl_triangles(source_path)
+    before = analyze_stl_triangles(triangles, stl_encoding, source_path)
+
+    selected_occurrences = [0 for _ in specs]
+    selected_unique_vertices = [set() for _ in specs]
+    selected_triangles = [set() for _ in specs]
+    moved_triangles: List[Triangle] = []
+
+    for triangle_index, triangle in enumerate(triangles):
+        moved_vertices = []
+        for vertex in triangle:
+            matched_indices = [
+                spec_index
+                for spec_index, spec in enumerate(specs)
+                if _vertex_matches_hole_move(vertex, spec)
+            ]
+            if len(matched_indices) > 1:
+                raise ValueError(
+                    "Hole selections overlap for vertex "
+                    f"{vector_to_dict(vertex)}; tighten radius, tolerance, or axial range."
+                )
+
+            if not matched_indices:
+                moved_vertices.append(vertex)
+                continue
+
+            spec_index = matched_indices[0]
+            spec = specs[spec_index]
+            selected_occurrences[spec_index] += 1
+            selected_unique_vertices[spec_index].add(_rounded_vertex_key(vertex))
+            selected_triangles[spec_index].add(triangle_index)
+            moved_vertices.append(add(vertex, spec["delta"]))
+
+        moved_triangles.append(tuple(moved_vertices))
+
+    empty_specs = [
+        index
+        for index, count in enumerate(selected_occurrences)
+        if count == 0
+    ]
+    if empty_specs and not allow_empty_selection:
+        raise ValueError(
+            "Hole move selected no STL vertices for holes "
+            f"{empty_specs}; check current_center, radius, axis, radial_tolerance, and axial range."
+        )
+
+    _write_ascii_stl(target_path, moved_triangles, "moved_hole_centers")
+    after = analyze_stl_triangles(moved_triangles, "ascii", target_path)
+
+    hole_summaries = []
+    for spec_index, spec in enumerate(specs):
+        hole_summaries.append({
+            "index": spec["index"],
+            "axis": spec["axis"],
+            "current_center": vector_to_dict(spec["current_center"]),
+            "target_center": vector_to_dict(spec["target_center"]),
+            "delta": vector_to_dict(spec["delta"]),
+            "radius": spec["radius"],
+            "radial_tolerance": spec["radial_tolerance"],
+            "axial_min": spec["axial_min"],
+            "axial_max": spec["axial_max"],
+            "selected_vertex_occurrence_count": selected_occurrences[spec_index],
+            "selected_unique_vertex_count": len(selected_unique_vertices[spec_index]),
+            "selected_triangle_count": len(selected_triangles[spec_index]),
+        })
+
+    warnings = [
+        "This is a direct STL mesh vertex edit, not a parametric CAD feature update.",
+        "Use render_stl_preview, compare_stl_meshes, and validate_stl_solid after editing print-critical parts.",
+    ]
+    if before["topology"]["watertight"] != after["topology"]["watertight"]:
+        warnings.append("Watertightness changed after moving hole vertices; inspect the edited STL before printing.")
+
+    return {
+        "success": True,
+        "source_file": source_path,
+        "output_file": target_path,
+        "source_stl_encoding": stl_encoding,
+        "holes": hole_summaries,
+        "before": before,
+        "after": after,
+        "warnings": warnings,
     }

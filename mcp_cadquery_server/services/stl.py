@@ -4,6 +4,7 @@ from ..domain.rendering import render_stl_preview
 from ..domain.stl_analysis import (
     analyze_cad_file,
     compare_stl_meshes,
+    move_stl_hole_centers,
     probe_stl_tunnel,
     solidify_stl_mesh,
     transform_stl_mesh,
@@ -16,6 +17,7 @@ from ..schemas.stl import (
     DetectMountFeaturesArgs,
     InspectStlPlaneSectionsArgs,
     InspectStlSectionsArgs,
+    MoveStlHoleCentersArgs,
     ProbeStlTunnelArgs,
     RenderStlPreviewArgs,
     SolidifyStlMeshArgs,
@@ -61,6 +63,27 @@ def handle_transform_stl_mesh(args: TransformStlMeshArgs, request_id: str) -> di
         }
     except Exception as e:
         error_msg = f"Error during STL mesh transform: {e}"
+        log.error(error_msg, exc_info=True)
+        raise Exception(error_msg)
+
+
+def handle_move_stl_hole_centers(args: MoveStlHoleCentersArgs, request_id: str) -> dict:
+    """Move measured existing STL hole centers by direct mesh vertex editing."""
+    log.info(f"Handling move_stl_hole_centers request (ID: {request_id})")
+    try:
+        move_result = move_stl_hole_centers(
+            file_path=args.file_path,
+            output_path=args.output_path,
+            holes=[hole.model_dump(exclude_none=True) for hole in args.holes],
+            allow_empty_selection=args.allow_empty_selection,
+        )
+        return {
+            "success": True,
+            "message": f"STL hole centers moved successfully: {move_result['output_file']}",
+            "result": move_result,
+        }
+    except Exception as e:
+        error_msg = f"Error during STL hole center move: {e}"
         log.error(error_msg, exc_info=True)
         raise Exception(error_msg)
 
