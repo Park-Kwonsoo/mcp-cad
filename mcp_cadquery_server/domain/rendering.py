@@ -8,12 +8,21 @@ from typing import Any, Dict, List, Optional, Tuple
 from .mesh_primitives import Triangle, Vertex, analyze_stl_triangles, read_stl_triangles, resolve_existing_file
 
 
+_VIEW_ALIASES: Dict[str, str] = {
+    "isometric": "iso",
+    "perspective": "iso",
+}
+
 def _normalize_preview_views(views: Optional[List[str]]) -> List[str]:
-    normalized = [view.strip().lower() for view in (views or ["top", "front", "right", "iso"]) if view.strip()]
-    supported = {"top", "front", "right", "iso"}
+    raw = [view.strip().lower() for view in (views or ["top", "front", "right", "iso"]) if view.strip()]
+    normalized = [_VIEW_ALIASES.get(v, v) for v in raw]
+    supported = {"top", "front", "right", "iso", "left", "back", "bottom"}
     unsupported = [view for view in normalized if view not in supported]
     if unsupported:
-        raise ValueError(f"Unsupported STL preview view(s): {', '.join(unsupported)}")
+        raise ValueError(
+            f"Unsupported STL preview view(s): {', '.join(unsupported)}. "
+            f"Supported: {', '.join(sorted(supported))} (aliases: isometric→iso)"
+        )
     if not normalized:
         raise ValueError("At least one preview view is required.")
     return normalized
@@ -25,6 +34,15 @@ def _preview_view_basis(view: str) -> Tuple[Vertex, Vertex, Vertex]:
         return (1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, -1.0, 0.0)
     if view == "right":
         return (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)
+    if view == "left":
+        # Camera at -X looking toward +X; flip horizontal to avoid mirror image
+        return (0.0, -1.0, 0.0), (0.0, 0.0, 1.0), (-1.0, 0.0, 0.0)
+    if view == "back":
+        # Camera at +Y looking toward -Y; flip horizontal to avoid mirror image
+        return (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0)
+    if view == "bottom":
+        # Camera below (-Z) looking up; flip v to avoid mirror image of top
+        return (1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)
     if view == "iso":
         inv_sqrt_2 = 1.0 / math.sqrt(2.0)
         inv_sqrt_3 = 1.0 / math.sqrt(3.0)

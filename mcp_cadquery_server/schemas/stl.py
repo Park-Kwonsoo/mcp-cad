@@ -119,7 +119,7 @@ class DetectMountFeaturesArgs(BaseModel):
 class RenderStlPreviewArgs(BaseModel):
     file_path: str = Field(..., description="Path to an STL file to render into a visual preview image through MCP")
     output_path: str = Field(..., description="Target .svg path for the rendered STL visual preview")
-    views: Optional[List[str]] = Field(None, description="Preview views to include: top, front, right, iso. Defaults to all four.")
+    views: Optional[List[str]] = Field(None, description="Preview views to include: top, front, right, iso, left, back, bottom. Alias: isometric→iso. Defaults to [top, front, right, iso].")
     width: int = Field(1200, description="SVG preview width in pixels")
     height: int = Field(900, description="SVG preview height in pixels")
     margin: int = Field(24, description="Panel margin in pixels")
